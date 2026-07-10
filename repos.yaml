@@ -1,0 +1,54 @@
+# repos.yaml — the body map: the single source of repo IDENTITY.
+#
+# This is the template body map: the five organs + the PyAutoProject
+# satellite family. Replace YOURORG with your GitHub owner and the
+# autoproject rows with your science repos, then run:
+#
+#   python3 scripts/repos_sync.py --write
+
+categories:
+  organ: {}
+  library: {}
+  workspace: {}
+  workspace_test: {}
+  assistant: {}
+
+repos:
+  PyAutoMind:
+    github: YOURORG/PyAutoMind
+    category: organ
+    role: "Intent, goals, priorities, workflow state; every task starts as a markdown prompt here."
+  PyAutoBrain:
+    github: YOURORG/PyAutoBrain
+    category: organ
+    role: "Reasoning/orchestration layer; how work is decomposed and routed; the specialist agents."
+  PyAutoBuild:
+    github: YOURORG/PyAutoBuild
+    category: organ
+    role: "Packaging, tagging, notebook generation, release execution."
+  PyAutoHeart:
+    github: YOURORG/PyAutoHeart
+    category: organ
+    role: "Health/readiness — the authoritative \"is it safe to release?\" verdict."
+  PyAutoMemory:
+    github: YOURORG/PyAutoMemory
+    category: organ
+    role: "Long-term scientific/software/project knowledge."
+
+  PyAutoProject:
+    github: YOURORG/PyAutoProject
+    category: library
+    role: "Your science library — model + analysis on the PyAutoFit engine."
+  autoproject_workspace:
+    github: YOURORG/autoproject_workspace
+    category: workspace
+    role: "End-to-end example scripts that build to notebooks."
+  autoproject_workspace_test:
+    github: YOURORG/autoproject_workspace_test
+    category: workspace_test
+    role: "Regression, smoke and parity scripts (code-heavy, doc-light)."
+
+  # Uncomment when the clone agent seeds your assistant:
+  # autoproject_assistant:
+  #   github: YOURORG/autoproject_assistant
+  #   category: assistant

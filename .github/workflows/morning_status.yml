@@ -1,0 +1,217 @@
+name: pyauto-update-digest
+
+on:
+  schedule:
+    # GitHub Actions cron is UTC-only and jitters by 0–3h under load (every
+    # historical scheduled run of the previous version landed at UTC 07:19–
+    # 08:41, never anywhere near the nominal 05:00/06:00 slot). 05:00 UTC
+    # nominally fires at UK 06:00 (BST) / 05:00 (GMT); with realistic jitter
+    # actual delivery is roughly UK 06:00–09:00 in summer, 05:00–08:00 in
+    # winter. That's "morning" — close enough for a digest, and one cron
+    # means no per-day dedupe state.
+    - cron: "0 5 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  # claude-code-action@v1 requires OIDC to fetch a short-lived GitHub
+  # token for repo metadata calls (see `src/github/token.ts:138` —
+  # `setupGitHubToken` → `getOidcToken`). Without this the action exits
+  # with `Could not fetch an OIDC token` before reaching the prompt.
+  id-token: write
+
+jobs:
+  pyauto-update-digest:
+    runs-on: ubuntu-latest
+    env:
+      REPOS: >-
+        YOURORG/PyAutoConf
+        YOURORG/PyAutoFit
+        YOURORG/PyAutoArray
+        YOURORG/PyAutoGalaxy
+        YOURORG/PyAutoLens
+        YOURORG/autofit_workspace
+        YOURORG/autogalaxy_workspace
+        YOURORG/autolens_workspace
+    steps:
+      # claude-code-action@v1 agent mode runs `git config` in the workspace at
+      # startup (configureGitAuth) and dies with "fatal: not in a git
+      # directory" if nothing is checked out — so the checkout is load-bearing
+      # even though the digest itself only reads the GitHub API.
+      - uses: actions/checkout@v4
+
+      - name: Fetch commits to main from the last 24h
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          since=$(date -u -d '24 hours ago' --iso-8601=seconds)
+          until=$(date -u --iso-8601=seconds)
+          uk_date=$(TZ=Europe/London date '+%Y-%m-%d (%a)')
+
+          tmp=$(mktemp -d)
+          : > "$tmp/all.jsonl"
+
+          for repo in $REPOS; do
+            # gh api fetches the raw commits list (default branch resolves to
+            # main for every PyAuto repo). per_page=100 is the API max; 24h of
+            # activity on any one PyAuto repo has never come close.
+            gh api "repos/$repo/commits?since=$since&per_page=100" \
+              | jq --arg repo "$repo" -c '
+                  .[]
+                  | {
+                      repo:         $repo,
+                      sha:          (.sha[0:7]),
+                      subject:      (.commit.message | split("\n")[0]),
+                      body:         (.commit.message | split("\n")[1:] | join("\n")),
+                      author:       (.commit.author.name // .author.login // "unknown"),
+                      committed_at: .commit.author.date,
+                      url:          .html_url,
+                      # Best-effort PR-number parse from the subject line.
+                      # Matches both `... (#123)` and `Merge pull request #123 from ...`
+                      pr_number:    (
+                        (.commit.message | split("\n")[0])
+                        | capture("(?:^Merge pull request #|\\(#)(?<n>[0-9]+)") ?
+                        | .n | tonumber
+                      )
+                    }
+                ' \
+              >> "$tmp/all.jsonl"
+          done
+
+          jq -s --arg since "$since" --arg until "$until" --arg uk_date "$uk_date" \
+            '{since: $since, until: $until, uk_date: $uk_date, commits: .}' \
+            "$tmp/all.jsonl" > pushes_to_main.json
+
+          echo "--- pushes_to_main.json ---"
+          jq '{since, until, uk_date, count: (.commits | length)}' pushes_to_main.json
+
+      - name: Summarise pushes with Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Everything this job touches is public commit metadata, and the
+          # default-hidden output masks real failures (an expired token reads
+          # as "slack_payload.json missing" three steps later).
+          show_full_output: true
+          # Default permission mode denies all writes, so Claude summarises
+          # the commits and then can't save slack_payload.json. The job's
+          # GITHUB_TOKEN is contents:read, so nothing written here can leave
+          # the runner except via the POST step.
+          claude_args: '--allowedTools "Write"'
+          prompt: |
+            Read `pushes_to_main.json` in this directory. It has shape:
+
+              { "since": "<ISO-UTC>",
+                "until": "<ISO-UTC>",
+                "uk_date": "YYYY-MM-DD (Mon)",
+                "commits": [ { "repo": "YOURORG/<name>",
+                               "sha": "abc1234",
+                               "subject": "<first line of commit message>",
+                               "body": "<rest of commit message>",
+                               "author": "<name>",
+                               "committed_at": "<ISO-UTC>",
+                               "url": "https://github.com/.../commit/<sha>",
+                               "pr_number": <int | null> }, ... ] }
+
+            Each commit is something that landed on `main` in the last 24h
+            across the PyAuto library + workspace repos.
+
+            Audience: end users of PyAutoLens, PyAutoGalaxy, PyAutoFit
+            (working astronomers, not the dev team). Tone: friendly,
+            plain language, science-user-facing — explain *what changed
+            for them*, not the implementation details.
+
+            Classify each commit into one of three buckets:
+
+              1) RELEASE BUMP — subject matches one of:
+                 - `^Release \d+\.\d+`
+                 - `^Updated version in __init__ to`
+                 - `^bump (?i:version)`
+                 - `^Release \d+\.\d+\.\d+: bump Colab URL`
+                 - `post-release`
+                 Surface these AS A SUMMARY at the top of the repo's
+                 section, like `*Released X.Y.Z*` with a link to the
+                 latest such commit. If there are multiple release bumps
+                 for one repo in one day, collapse to the highest version.
+
+              2) MERGED PR — `pr_number` is present (non-null). Render as
+                 a user-facing one-liner derived from the subject + first
+                 paragraph of `body`, with link `(<<url>|#<pr_number>>)`.
+
+              3) DIRECT PUSH TO MAIN — `pr_number` is null AND not a
+                 release bump. Render as `<one-liner from subject> — direct
+                 push by <author> (<<url>|<sha>>)`.
+
+            Skip these entirely (do not mention them at all):
+              - pure formatting / black / pre-commit chores
+              - typo fixes (unless in user-visible docs)
+              - dependabot / dependency-bump-only commits
+              - CI / workflow tweaks (`.github/`, `pre-commit`, etc.)
+              - README badge updates
+              - Merge commits that just merge a feature branch already
+                covered by the PR's own commits (the merge commit itself
+                is noise; the PR is the signal)
+
+            Group surviving items by repo. Drop the `YOURORG/` prefix
+            in the displayed repo name. Within a repo's section, list the
+            release bump (if any) first, then merged PRs, then direct
+            pushes.
+
+            Then write `slack_payload.json` in the repo root, with this
+            exact shape:
+
+              {
+                "text": "PyAuto update — <uk_date>",
+                "blocks": [
+                  { "type": "header",
+                    "text": { "type": "plain_text",
+                              "text": "PyAuto update — <uk_date>" } },
+                  { "type": "section",
+                    "text": { "type": "mrkdwn",
+                              "text": "<intro line>" } },
+                  { "type": "section",
+                    "text": { "type": "mrkdwn",
+                              "text": "*<repo>*\n• <user-facing line>\n…" } }
+                ]
+              }
+
+            (Add one section block per repo that has surviving items.
+            Omit any repo with zero after the skip-list.)
+
+            If `commits` is empty (or every commit was filtered out by
+            the skip-list above), produce ONLY:
+
+              {
+                "text": "PyAuto update — <uk_date>",
+                "blocks": [
+                  { "type": "header",
+                    "text": { "type": "plain_text",
+                              "text": "PyAuto update — <uk_date>" } },
+                  { "type": "section",
+                    "text": { "type": "mrkdwn",
+                              "text": "Quiet day — no user-facing changes shipped in the last 24 hours." } }
+                ]
+              }
+
+            Intro line on a non-quiet day should be a single sentence
+            naming the count and which packages had updates, e.g.
+            "<n> change(s) shipped today across PyAutoLens and
+            autolens_workspace, including a new PyAutoLens release."
+
+            Do not POST anything yourself, do not commit, do not modify
+            any other file.
+
+      - name: POST to Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.PYAUTO_UPDATE_WEBHOOK_URL }}
+        run: |
+          if [ ! -s slack_payload.json ]; then
+            echo "::error::slack_payload.json missing or empty"
+            exit 1
+          fi
+          curl -sS -X POST \
+               -H "Content-Type: application/json" \
+               --data @slack_payload.json \
+               --fail-with-body \
+               "$SLACK_WEBHOOK_URL"
