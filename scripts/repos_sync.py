@@ -29,7 +29,7 @@ failing the run.
 
   * PyAutoHeart/config/repos.yaml          — polled repos exist, owners match
   * PyAutoBuild/pre_build.sh               — run_workspace repos exist
-  * admin_jammy/software/ensure_workspace_labels.sh — owner/name pairs match
+  * PyAutoBrain/bin/ensure_workspace_labels.sh — owner/name pairs match
   * the `origin` remote of every local checkout — manifest matches reality
   * the tenant firewall — no instance fact (satellite repo name, GitHub
     owner, workspace path) in Brain/Heart/Build *.py / *.sh outside the
@@ -52,6 +52,8 @@ MAP_BEGIN = "<!-- repos_sync:map:begin -->"
 MAP_END = "<!-- repos_sync:map:end -->"
 HISTORY_BEGIN = "<!-- repos_sync:history:begin -->"
 HISTORY_END = "<!-- repos_sync:history:end -->"
+ORGANS_BEGIN = "<!-- repos_sync:organs:begin -->"
+ORGANS_END = "<!-- repos_sync:organs:end -->"
 
 # The universal "never rewrite history" safety policy is single-sourced in a
 # markdown file (so it can be edited without touching this generator) and
@@ -189,6 +191,45 @@ def system_map(categories, repos):
     return "\n".join(lines)
 
 
+def public_organs(repos):
+    """The front-door organ set: every `category: organ` row (manifest order)
+    plus any repo flagged `front_door: true` (e.g. Nerves/PyAutoConf — a
+    library that is part of the organism's public self-presentation without
+    being a category:organ). This is a *superset* of the internal organism map
+    (`system_map`, strict category:organ per PyAutoBrain/ORGANISM.md); the two
+    are deliberately allowed to differ."""
+    organs = [(n, r) for n, r in repos.items() if r["category"] == "organ"]
+    front = [(n, r) for n, r in repos.items()
+             if r.get("front_door") and r["category"] != "organ"]
+    return organs + front
+
+
+def organ_public_table(repos, *, bold):
+    """The organ table for a public front-door README, a pure function of the
+    body map. `bold` bold-links the repo cell (the `.github` org-profile style)
+    vs a plain link (the PyAutoScientist README style). Role text is
+    `public_role` (the curated public copy) falling back to the terse manifest
+    `role`."""
+    lines = ["| Organ | Repo | Role |", "|---|---|---|"]
+    for name, repo in public_organs(repos):
+        url = f"https://github.com/{repo['github']}"
+        link = f"[**{name}**]({url})" if bold else f"[{name}]({url})"
+        role = repo.get("public_role", repo["role"])
+        lines.append(f"| {repo.get('organ', name)} | {link} | {role} |")
+    return "\n".join(lines)
+
+
+# The public front-door docs that must list every organ. The two READMEs carry
+# a generated table between ORGANS markers; the hub blurb is prose, so it is
+# presence-checked (every organ name must appear) rather than regenerated. All
+# are soft-skipped when the sibling repo is not checked out.
+PUBLIC_TABLE_TARGETS = [
+    (".github/profile/README.md", True),
+    ("PyAutoScientist/README.md", False),
+]
+HUB_BLURB = "pyautolabs.github.io/index.html"
+
+
 def replace_block(path, content, begin=MARK_BEGIN, end=MARK_END):
     text = path.read_text()
     if begin not in text or end not in text:
@@ -270,7 +311,7 @@ def check_pre_build(root, repos):
 
 
 def check_labels(root, repos):
-    script = root / "admin_jammy/software/ensure_workspace_labels.sh"
+    script = root / "PyAutoBrain/bin/ensure_workspace_labels.sh"
     if not script.exists():
         return []
     block = re.search(r"REPOS=\((.*?)\)", script.read_text(), re.DOTALL)
@@ -356,6 +397,45 @@ def check_history_blocks(root, repos, hpol):
 # — writing real per-repo guidance is its own work, out of scope here. Absent
 # (not-checked-out) repos are skipped, exactly like the map-block generation, so
 # this runs cleanly in a partial/web checkout.
+
+
+def check_public_tables(root, repos):
+    """Every front-door README's generated organ table must match the body map
+    (so a new organ can never silently drop out of the public front door).
+    Soft-skips a target that is not checked out."""
+    problems = []
+    for rel, bold in PUBLIC_TABLE_TARGETS:
+        path = root / rel
+        if not path.exists():
+            continue
+        text = path.read_text()
+        if ORGANS_BEGIN not in text or ORGANS_END not in text:
+            problems.append(
+                f"{rel}: no repos_sync:organs marker block "
+                "(add the markers, then run --write)"
+            )
+        elif extract_block(text, ORGANS_BEGIN, ORGANS_END) != \
+                organ_public_table(repos, bold=bold):
+            problems.append(
+                f"{rel}: organ table stale — run "
+                "`python3 PyAutoMind/scripts/repos_sync.py --write`"
+            )
+    return problems
+
+
+def check_hub_blurb(root, repos):
+    """The hub's prose organism blurb is not regenerated (it is grammar, not a
+    table), but every organ name must appear in it. Soft-skips when absent."""
+    path = root / HUB_BLURB
+    if not path.exists():
+        return []
+    text = path.read_text()
+    return [
+        f"{HUB_BLURB}: organ '{repo.get('organ', name)}' missing from the "
+        "organism blurb"
+        for name, repo in public_organs(repos)
+        if repo.get("organ", name) not in text
+    ]
 
 
 def claude_md_is_pointer(text):
@@ -457,10 +537,12 @@ FIREWALL_ALLOWLIST = {
     "PyAutoBrain/agents/faculties/sizing/_sizing.py": {"PyAutoFit"},
     "PyAutoBrain/bin/check_skill_line_counts.sh": {"admin_jammy", "autolens_profiling"},
     "PyAutoBrain/bin/clean_slate.sh": {"PyAutoLabs"},
+    "PyAutoBrain/bin/ensure_workspace_labels.sh": {"HowToFit", "HowToGalaxy", "HowToLens", "Jammy2211", "PyAutoArray", "PyAutoConf", "PyAutoFit", "PyAutoGalaxy", "PyAutoLabs", "PyAutoLens", "autofit_workspace", "autofit_workspace_test", "autogalaxy_workspace", "autogalaxy_workspace_test", "autolens_workspace", "autolens_workspace_test", "euclid_strong_lens_modeling_pipeline"},
     "PyAutoBrain/bin/install.sh": {"PyAutoFit", "PyAutoLabs", "admin_jammy", "autolens_profiling"},
     "PyAutoBrain/bin/overnight_status.sh": {"PyAutoLabs", "autolens_assistant"},
     "PyAutoBrain/bin/pull_all_main.sh": {"PyAutoLabs"},
     "PyAutoBrain/bin/version_drift.sh": {"PyAutoArray", "PyAutoConf", "PyAutoFit", "PyAutoGalaxy", "PyAutoLabs", "PyAutoLens", "autofit_workspace", "autogalaxy_workspace", "autolens_workspace"},
+    "PyAutoBrain/bin/worktree.sh": {"PyAutoArray", "PyAutoConf", "PyAutoFit", "PyAutoGalaxy", "PyAutoLabs", "PyAutoLens", "admin_jammy", "autolens_workspace"},
     "PyAutoBrain/tests/test_activity_gate.py": {"HowToFit", "HowToLens", "PyAutoArray", "PyAutoConf", "PyAutoFit", "PyAutoLens", "autolens_workspace"},
     "PyAutoBrain/tests/test_policy_seams.py": {"PyAutoFit", "PyAutoLens", "autolens_workspace"},
     "PyAutoBrain/tests/test_review_inplace.py": {"PyAutoArray", "PyAutoLabs"},
@@ -636,6 +718,9 @@ def main():
         for name in repos:
             write_block(root / name / "AGENTS.md", hpol,
                         HISTORY_BEGIN, HISTORY_END, required=False)
+        for rel, bold in PUBLIC_TABLE_TARGETS:
+            write_block(root / rel, organ_public_table(repos, bold=bold),
+                        ORGANS_BEGIN, ORGANS_END, required=False)
         write_claude_md_pointers(root, repos)
 
     checks = {
@@ -646,6 +731,8 @@ def main():
         "tenant firewall (organ code)": check_tenant_firewall(root, repos),
         "organism-map blocks (generated)": check_map_blocks(root, repos, smap),
         "never-rewrite-history blocks (generated)": check_history_blocks(root, repos, hpol),
+        "public front-door organ tables (generated)": check_public_tables(root, repos),
+        "hub organism blurb (organs present)": check_hub_blurb(root, repos),
         "CLAUDE.md → AGENTS.md pointers": check_claude_md_pointers(root, repos),
     }
     drift = False

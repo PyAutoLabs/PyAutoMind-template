@@ -1,3 +1,3 @@
-## pyautogut-organ (Gut organ + hygiene drive seam — complete)
+## refactor-post-phase3 (PyAutoReduce post-phase-3 refactor — MERGED)
 
 <!-- emptied by spawn; schema: REFERENCE.md -->

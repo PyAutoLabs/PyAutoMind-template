@@ -12,7 +12,7 @@
 # Both functions are no-ops when there is nothing to do, and safe to call
 # multiple times in the same session.
 #
-# Replaces the previous admin_jammy/software/admin_sync.sh which operated on
+# Replaces a now-removed admin_sync.sh helper that formerly operated on
 # admin_jammy/prompt/. PyAutoMind is now the home of prompts and registry.
 
 # An explicitly set PROMPT_REPO is always honoured as-is (a missing path then
@@ -48,14 +48,16 @@ _prompt_sync_require_repo() {
 # Commit and push any new untracked .md files at the repo root or under
 # category dirs as one "sync new task ideas" commit. Each new file is listed
 # individually in the commit body so the history shows which prompts arrived.
-# Excludes issued/ (handled by prompt_sync_push when skills move files there)
-# and tmp/ (scratch).
+# Excludes active/ and complete/ (lifecycle dirs the skills move files into via
+# prompt_sync_push, issue #71) and tmp/ (scratch). New draft prompts under
+# draft/ are swept normally.
 prompt_sync_new_prompts() {
   _prompt_sync_require_repo || return 1
   local untracked
   untracked=$(git -C "$PROMPT_REPO" ls-files --others --exclude-standard \
     -- '*.md' '*/*.md' \
-    | grep -v '^issued/' \
+    | grep -v '^active/' \
+    | grep -v '^complete/' \
     | grep -v '^tmp/' \
     || true)
   [ -z "$untracked" ] && return 0
