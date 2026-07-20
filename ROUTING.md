@@ -20,7 +20,7 @@ advances to `active/`, and on merge to `complete/<YYYY>/<MM>/` (issue #71).
 | `feature/`       | new user-facing or scientific capabilities | feature planner |
 | `bug/`           | incorrect behaviour, crashes, regressions | debugger |
 | `refactor/`      | internal restructuring, no intended behaviour change | Refactor Agent (conductor; default-safe under `--auto`) |
-| `docs/`          | documentation, tutorials, notebooks, examples | documentation agent |
+| `docs/`          | documentation, tutorials, notebooks, examples | documentation agent; workspace/HowTo *example authorship* → Workspace Agent (conductor) |
 | `test/`          | test coverage, smoke tests, validation scripts | test engineer |
 | `release/`       | packaging, versions, deployment, release readiness | release engineer |
 | `maintenance/`   | dependency updates, hygiene, cleanup, small technical debt | hygiene agent |
@@ -62,6 +62,6 @@ commands; PyAutoBrain performs the routing.* Bodies + the boundary live in
 
 ## Not routed by work type
 
-`active/`, `complete/`, `z_features/`, `z_vault/` are workflow-lifecycle
-folders; `autoprompt/` holds meta prompts about this repo's own infrastructure.
-None of these are work-type folders and PyAutoBrain does not route them.
+`active/` and `complete/` are workflow-lifecycle folders (with
+`complete/archive/` for retired epic trackers + shelved prompts). None of these
+are work-type folders and PyAutoBrain does not route them.

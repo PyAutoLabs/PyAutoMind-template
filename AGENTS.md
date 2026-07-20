@@ -7,7 +7,7 @@ this repository.
 
 **PyAutoMind is the Mind of the PyAuto organism and the starting point of the
 PyAuto workflow.** It holds the organism's ideas, intent, goals, priorities and
-workflow state. Every task that ends up as a PR in PyAutoConf, PyAutoFit,
+workflow state. Every task that ends up as a PR in PyAutoNerves, PyAutoFit,
 PyAutoArray, PyAutoGalaxy, PyAutoLens, or any of the `*_workspace*` repos begins
 as a markdown file here.
 
@@ -36,13 +36,15 @@ For the full workflow narrative, conventions, and registry schemas, read
     numerical order. `scripts/lifecycle.py` owns the moves and drift-checks
     them.
 
-  Meta folders are **not** lifecycle states and keep their own names:
-  `z_features/` (multi-task epic trackers), `z_vault/` (deferred prompts — the
-  former `shelved/` merged here), and `autoprompt/` (prompts about this repo's
-  own infrastructure).
+  Retired non-record material lives in **`complete/archive/`** (skipped by
+  `lifecycle.py check`/`index`): `archive/epics/` (former `z_features/`
+  multi-task trackers) and `archive/shelved/` (former `z_vault/` deferred
+  prompts + dev notes). The old `z_features/`, `z_vault/` and `autoprompt/`
+  top-level folders were retired here on 2026-07-13.
 - **Registry** — root-level markdown files, each with one job: `active.md`
-  (in-flight tasks), `planned.md` (scoped, not started), `complete.md`
-  (shipped), `parked.md` (started but not in flight), `queue.md` (ordered
+  (in-flight tasks), `planned.md` (scoped, not started), `parked.md` (started
+  but not in flight), `condemned.md` (self-material staged for the Gut's
+  transit-and-void lifecycle — see PyAutoGut), `queue.md` (ordered
   input for `register_and_iterate --queue`), `ideas.md` (raw inbox swept by
   `$intake`, `/intake` in Claude). Mutate these only via the skills in `skills/` so commit
   messages stay consistent.
@@ -64,11 +66,10 @@ For the full workflow narrative, conventions, and registry schemas, read
 ## Hard rules
 
 1. **Never rewrite history on any branch with a remote.** No `git init` over an
-   existing repo, no `git push --force` to `main`. The 2026-04-27 drift incident
-   that motivated `autoprompt/03_history_rewrite_guard.md` is the reason.
+   existing repo, no `git push --force` to `main`. (Motivated by the 2026-04-27
+   drift incident.)
 2. **Pull before edit.** `git fetch && git status` first, every time. If behind
-   `origin/main`, `git pull --ff-only` before touching anything. See
-   `autoprompt/04_source_of_truth_rule.md`.
+   `origin/main`, `git pull --ff-only` before touching anything.
 3. **One prompt = one task = one PR.** If a prompt outlines multiple
    loosely-related changes, split into separate prompt files before issuing.
 4. **`tmp/` is scratch.** Never commit anything under it.
@@ -105,25 +106,8 @@ Read [README.md](README.md). It is current as of the last commit on this branch.
 <!-- repos_sync:history:begin -->
 ## Never rewrite history
 
-NEVER perform these operations on any repo with a remote:
-
-- `git init` in a directory already tracked by git
-- `rm -rf .git && git init`
-- Commit with subject "Initial commit", "Fresh start", "Start fresh", "Reset
-  for AI workflow", or any equivalent message on a branch with a remote
-- `git push --force` to `main` (or any branch tracked as `origin/HEAD`)
-- `git filter-repo` / `git filter-branch` on shared branches
-- `git rebase -i` rewriting commits already pushed to a shared branch
-
-If the working tree needs a clean state, the **only** correct sequence is:
-
-    git fetch origin
-    git reset --hard origin/main
-    git clean -fd
-
-This applies equally to humans, local Claude Code, cloud Claude agents, Codex,
-and any other agent. The "Initial commit — fresh start for AI workflow" pattern
-that appeared independently on origin and local for three workspace repos is
-exactly what this rule prevents — it costs ~40 commits of redundant local work
-every time it happens.
+Never rewrite pushed history on any repo with a remote — no `git init` over a
+tracked repo, no force-push to `main`, no fresh-start "Initial commit", no
+`filter-repo` / `filter-branch` / `rebase -i` on pushed branches. To get a
+clean tree: `git fetch origin && git reset --hard origin/main && git clean -fd`.
 <!-- repos_sync:history:end -->

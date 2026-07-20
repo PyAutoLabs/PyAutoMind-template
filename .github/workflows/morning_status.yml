@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       REPOS: >-
-        YOURORG/PyAutoConf
+        YOURORG/PyAutoNerves
         YOURORG/PyAutoFit
         YOURORG/PyAutoArray
         YOURORG/PyAutoGalaxy

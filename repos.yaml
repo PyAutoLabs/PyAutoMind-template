@@ -22,8 +22,8 @@ repos:
     github: YOURORG/PyAutoBrain
     category: organ
     role: "Reasoning/orchestration layer; how work is decomposed and routed; the specialist agents."
-  PyAutoBuild:
-    github: YOURORG/PyAutoBuild
+  PyAutoHands:
+    github: YOURORG/PyAutoHands
     category: organ
     role: "Packaging, tagging, notebook generation, release execution."
   PyAutoHeart:
