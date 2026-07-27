@@ -43,9 +43,15 @@ MIND_WORK_TYPES = (
 MIND_RULES = [
     ("scripts/*", "KEEP"),
     ("REFERENCE.md", "KEEP"), ("AGENTS.md", "KEEP"), ("CLAUDE.md", "KEEP"),
-    ("LICENSE", "KEEP"), ("CONTRIBUTING.md", "KEEP"), ("ROUTING.md", "KEEP"),
+    ("LICENSE", "KEEP"), ("ROUTING.md", "KEEP"),
     (".gitignore", "KEEP"),
     ("README.md", "KEEP"),
+    # Org-wide pointer docs. Generic prose, but each names the owning org and
+    # links the canonical copy in that org's PyAutoScientist — so they take the
+    # same owner substitution .github/** does rather than a verbatim KEEP.
+    # Verbatim would stamp "Contributing to PyAutoLabs" into a fresh-slate
+    # template spawned for somebody else's org.
+    ("AI_POLICY.md", "KEEP_SUB"), ("CONTRIBUTING.md", "KEEP_SUB"),
     ("repos.yaml", "SPECIAL:body_map"),
     ("active.md", "EMPTY"), ("planned.md", "EMPTY"),
     ("parked.md", "EMPTY"), ("condemned.md", "EMPTY"), ("ideas.md", "EMPTY"), ("queue.md", "EMPTY"),
@@ -72,8 +78,10 @@ MIND_RULES = [
 MEMORY_RULES = [
     ("bibliography/*.py", "KEEP"), ("bibliography/README.md", "KEEP"),
     ("scripts/*", "KEEP"), ("tests/*", "KEEP"),
-    ("Makefile", "KEEP"), ("LICENSE", "KEEP"), ("CONTRIBUTING.md", "KEEP"),
+    ("Makefile", "KEEP"), ("LICENSE", "KEEP"),
     ("AGENTS.md", "KEEP"), ("CLAUDE.md", "KEEP"), (".gitignore", "KEEP"),
+    # Same org-wide pointer docs as MIND_RULES — owner substitution.
+    ("AI_POLICY.md", "KEEP_SUB"), ("CONTRIBUTING.md", "KEEP_SUB"),
     ("bibliography/*", "EMPTY"),
     (".github/*", "KEEP_SUB"),
     # The shared wiki schema is template content; the sub-wikis are instance
@@ -521,12 +529,13 @@ def stamp_family(root, family_dir):
             "  workspace_version: 0.1.0\n"
         )
         (ws / "config" / "build").mkdir(exist_ok=True)
-        (ws / "config" / "build" / "copy_files.yaml").write_text(
-            "# Files copied verbatim into notebooks/ (not converted) by the notebook\n"
-            "# build (PyAutoHands generate.py reads this workspace-local list). List\n"
-            "# paths relative to scripts/, e.g.:\n"
+        (ws / "config" / "build" / "no_run.yaml").write_text(
+            "# Scripts/notebooks the build must NOT execute (PyAutoHands run.py\n"
+            "# reads this workspace-local list). Every workspace must own this\n"
+            "# file — run.py raises if it is missing — but an empty list is valid\n"
+            "# and skips nothing. List paths relative to scripts/, e.g.:\n"
             "#\n"
-            "# - util/helpers.py\n"
+            "# - gui/mask  # GUI scripts cannot be run headless\n"
             "[]\n"
         )
     return stamped
