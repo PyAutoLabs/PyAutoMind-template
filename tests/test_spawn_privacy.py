@@ -158,6 +158,91 @@ def test_glob_matched_empty_files_get_comment_headers(tmp_path, filename, lead):
 # --------------------------------------------------------------------------
 
 
+LIVE_AUTONOMY_LOG = Path(__file__).resolve().parents[1] / "autonomy_log.md"
+
+
+@pytest.mark.skipif(
+    not LIVE_AUTONOMY_LOG.exists(),
+    reason="no live ledger here (e.g. a freshly-spawned Mind before its first run)",
+)
+def test_autonomy_log_constant_still_matches_the_live_schema():
+    """The constant must not go stale against the ledger it models.
+
+    Generating instead of parsing removes the leak, but it also removes the
+    feedback that kept the header current: nothing else notices if the live
+    ledger grows a column and the template keeps shipping the old table. This
+    is that feedback, and it is the only check here that reads the real file.
+    """
+    live = LIVE_AUTONOMY_LOG.read_text()
+    assert live.startswith(spawn.AUTONOMY_LOG_TEMPLATE), (
+        "the live autonomy_log.md header no longer matches AUTONOMY_LOG_TEMPLATE "
+        "— update the constant (and re-run spawn --apply), do not re-add parsing"
+    )
+
+
+def test_generated_ledger_equals_the_constant_exactly(fake_workspace, tmp_path):
+    """Pin the EMITTED file, not just the helper's return value.
+
+    Asserting `autonomy_log_body(...) == AUTONOMY_LOG_TEMPLATE` alone is
+    circular — it compares the helper with what the helper returns. This checks
+    what actually lands in the template.
+    """
+    out = tmp_path / "out"
+    spawn.generate_all(fake_workspace, out)
+    shipped = out / "PyAutoMind-template" / "autonomy_log.md"
+    assert shipped.read_text() == spawn.AUTONOMY_LOG_TEMPLATE
+
+
+def test_autonomy_log_template_is_a_usable_table_header():
+    """Independent shape check, so a malformed constant cannot pass silently."""
+    lines = [ln for ln in spawn.AUTONOMY_LOG_TEMPLATE.splitlines() if ln.strip()]
+    table = [ln for ln in lines if ln.startswith("|")]
+    assert len(table) == 2, f"expected a header row + separator, got {table}"
+    header, separator = table
+    assert set(separator.replace("|", "").replace("-", "").strip()) == set(), (
+        f"second table line is not a separator: {separator!r}"
+    )
+    assert header.count("|") == separator.count("|"), "column counts disagree"
+    assert lines[0].startswith("# "), "the ledger needs its H1 title"
+
+
+def test_autonomy_log_skeleton_never_opens_the_source(tmp_path):
+    """The ledger header is generated, not parsed (issue #123).
+
+    Passing a file that does not exist is the strongest form of the assertion:
+    if the source is never opened, no future edit to the live ledger — a row
+    inserted above the separator, a reformatted separator, a markdown
+    formatter's reflow — can change what the template ships.
+    """
+    missing = tmp_path / "autonomy_log.md"  # deliberately not created
+    body = spawn.autonomy_log_body(missing)
+    assert body == spawn.AUTONOMY_LOG_TEMPLATE
+    assert body.rstrip().endswith("|"), "the table header/separator is missing"
+
+
+@pytest.mark.parametrize(
+    "ledger",
+    [
+        # Well-formed: the case that happened to work before.
+        "| date | task |\n|------|------|\n| 2026-01-01 | LEAKME |\n",
+        # A row above the separator — copied by the old parse.
+        "| date | task |\n| 2026-01-01 | LEAKME |\n|------|------|\n",
+        # Separator reformatted — the old parse never broke, copying everything.
+        "| date | task |\n| --- | --- |\n| 2026-01-01 | LEAKME |\n",
+        # No separator at all.
+        "| date | task |\n| 2026-01-01 | LEAKME |\n",
+        # Prose above the table, as the real ledger has.
+        "# Log\n\nsome prose\n\n| date |\n|---|\n| 2026-01-01 LEAKME |\n",
+    ],
+)
+def test_autonomy_log_skeleton_is_constant_whatever_the_ledger(tmp_path, ledger):
+    """Shape assumptions about the live file are exactly what leaked before."""
+    src = tmp_path / "autonomy_log.md"
+    src.write_text(ledger)
+    assert "LEAKME" not in spawn.autonomy_log_body(src)
+    assert spawn.autonomy_log_body(src) == spawn.AUTONOMY_LOG_TEMPLATE
+
+
 def test_canary_scan_catches_a_leaked_registry_slug(tmp_path):
     """The scan must flag a person-name token, not just a science dataset."""
     (tmp_path / "planned.md").write_text(f"## {NAME_TOKEN}-audit-phases\n")
@@ -250,7 +335,17 @@ def fake_workspace(tmp_path):
             "active.md": ledger, "planned.md": ledger, "parked.md": ledger,
             "condemned.md": ledger, "ideas.md": f"- {LIVE_MARKER} idea line.\n",
             "queue.md": ledger,
-            "autonomy_log.md": f"| a | b |\n|---|---|\n| {LIVE_MARKER} | row |\n",
+            # Hostile on BOTH known axes (issue #123): a live row ABOVE the
+            # separator, and the separator itself cosmetically reformatted to
+            # `| --- |`. The old parse copied lines until one started with
+            # "|---", so the first leaked that row and the second never broke
+            # at all — it copied the entire ledger.
+            "autonomy_log.md": (
+                f"| date | task |\n"
+                f"| {LIVE_MARKER} | row above the separator |\n"
+                f"| --- | --- |\n"
+                f"| {LIVE_MARKER} | row below the separator |\n"
+            ),
             "README.md": "# Mind\n", "AGENTS.md": "# Agents\n",
             "REFERENCE.md": "# Ref\n", "ROUTING.md": "# Routing\n",
             "CLAUDE.md": "# Claude\n", "LICENSE": "MIT\n", ".gitignore": "tmp/\n",
