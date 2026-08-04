@@ -48,5 +48,3 @@ The organism this repo is the Mind of (Mind, Brain, Heart, Hands, Memory) is
 described once in
 [PyAutoBrain/ORGANISM.md](https://github.com/PyAutoLabs/PyAutoBrain/blob/main/ORGANISM.md)
 and documented in full at <https://pyautoscientist.readthedocs.io>.
-
-<!-- TEMPORARY drift marker: self-heal end-to-end test, PyAutoMind#125. The sync PR should remove this line. -->
