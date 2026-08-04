@@ -42,6 +42,10 @@ MIND_WORK_TYPES = (
 
 MIND_RULES = [
     ("scripts/*", "KEEP"),
+    # Generator machinery, same class as scripts/ (spec rule 1b; MEMORY_RULES
+    # already keeps tests/). The privacy test must travel with the generator it
+    # guards, or a spawned org can reintroduce the rule-5 leak (#118) silently.
+    ("tests/*", "KEEP"),
     ("REFERENCE.md", "KEEP"), ("AGENTS.md", "KEEP"), ("CLAUDE.md", "KEEP"),
     ("LICENSE", "KEEP"), ("ROUTING.md", "KEEP"),
     (".gitignore", "KEEP"),
@@ -99,7 +103,42 @@ MEMORY_RULES = [
 # Chosen to be absent from every KEEP-verbatim file (verified at run time —
 # the scan covers the whole output tree, so a canary in a kept file fails
 # the run and forces the list or the rules to be reconsidered).
-CANARY_TOKENS = ("slacs", "b1938", "cosmos_web_ring", "smbh_binary", "arctic")
+# Dataset names catch leaked science content; person names catch leaked task
+# slugs and prompt lines (the spec's example list names `Nightingale`).
+CANARY_TOKENS = (
+    "slacs", "b1938", "cosmos_web_ring", "smbh_binary", "arctic",
+    "nightingale", "rhayes",
+)
+
+# Titles for EMPTY-ruled files, keyed by their path RELATIVE TO THE REPO ROOT
+# (spawn_spec.md rules 5 + 6: "header line + schema pointer comment only").
+# These are GENERATED, never read from the live file: some registry files carry
+# no H1 at all, so their first line is a live registry entry, and a
+# heading-shape test cannot save us either — a task slug written as an H2 is a
+# structurally valid heading. Copying any source byte here breaks the privacy
+# invariant (spawn_spec.md).
+#
+# Keyed by relative path, not basename, so a glob-matched file that merely
+# SHARES a name (e.g. Memory's `bibliography/active.md`, caught by the broad
+# `bibliography/*` EMPTY rule) does not silently inherit a root file's title.
+EMPTY_TITLES = {
+    "active.md": "# Active Tasks",
+    "planned.md": "# Planned",
+    "parked.md": "# Parked tasks",
+    "condemned.md": "# Condemned material",
+    "ideas.md": "# Ideas",
+    "queue.md": "# Queue",
+    "reading-queue.md": "# Reading queue",
+}
+
+# Generated header comments for EMPTY files matched by a glob rather than by
+# name (Memory's `bibliography/*` — arbitrary filenames, so no title map).
+# spawn_spec.md rule 2 already specifies a generated header comment here.
+EMPTY_COMMENTS = {
+    ".bib": "% Canonical BibTeX metadata — populated by your literature.",
+    ".yaml": "# Populated by your literature.",
+    ".yml": "# Populated by your literature.",
+}
 
 # --------------------------------------------------------------------------
 # Generated assets
@@ -335,16 +374,38 @@ def match_rule(rel, rules):
     return None, None
 
 
-def empty_body(src):
-    try:
-        first = src.read_text(errors="replace").splitlines()[0]
-    except IndexError:
-        first = ""
-    if src.suffix in {".yaml", ".yml"}:
-        # YAML consumers parse every non-# line — an HTML comment would read
-        # as content (e.g. a bibkey alias with a missing target).
-        return first + "\n\n# emptied by spawn; schema: REFERENCE.md\n"
-    return first + "\n\n<!-- emptied by spawn; schema: REFERENCE.md -->\n"
+def empty_body(src, rel=None):
+    """Generate the EMPTY body for `rel` WITHOUT reading the source.
+
+    The source is never opened: an EMPTY output is a generated title plus a
+    schema pointer, so no live registry entry, idea line or bibliography entry
+    can reach a template (the spawn_spec.md privacy invariant).
+
+    `rel` is the path relative to the repo root and is what EMPTY_TITLES is
+    keyed on. It defaults to the basename only so direct callers (tests) stay
+    ergonomic; the generators always pass the real relative path.
+    """
+    key = Path(rel).as_posix() if rel is not None else src.name
+    header = EMPTY_TITLES.get(key)
+    if header is None:
+        header = EMPTY_COMMENTS.get(src.suffix)
+    if header is None:
+        # Same doctrine as UNMATCHED: a new EMPTY file class is a human
+        # decision — add it to the spec's tables and mirror it here. Guessing
+        # a header from the live file is what leaked instance content before.
+        raise SystemExit(
+            f"spawn: EMPTY file '{key}' has no generated header.\n"
+            f"  Add it to EMPTY_TITLES (named registry files) or EMPTY_COMMENTS\n"
+            f"  (glob-matched files), updating docs/pyautobrain/spawn_spec.md first."
+        )
+    if src.suffix in {".yaml", ".yml", ".bib"}:
+        # YAML/BibTeX consumers parse every non-comment line — an HTML comment
+        # would read as content (e.g. a bibkey alias with a missing target).
+        marker = "# emptied by spawn; schema: REFERENCE.md"
+        if src.suffix == ".bib":
+            marker = "% emptied by spawn; schema: REFERENCE.md"
+        return header + "\n\n" + marker + "\n"
+    return header + "\n\n<!-- emptied by spawn; schema: REFERENCE.md -->\n"
 
 
 def autonomy_log_body(src):
@@ -390,7 +451,7 @@ def generate_mind(mind_root, out_dir):
         elif action == "KEEP_SUB":
             dest.write_text(substitute_owner(src.read_text(errors="replace")))
         elif action == "EMPTY":
-            dest.write_text(empty_body(src))
+            dest.write_text(empty_body(src, rel))
         elif action == "SPECIAL:autonomy_log":
             dest.write_text(autonomy_log_body(src))
         elif action == "SPECIAL:body_map":
@@ -413,7 +474,7 @@ def generate_memory(memory_root, out_dir):
         elif action == "KEEP_SUB":
             dest.write_text(substitute_owner(src.read_text(errors="replace")))
         elif action == "EMPTY":
-            dest.write_text(empty_body(src))
+            dest.write_text(empty_body(src, rel))
         elif action == "SPECIAL:memory_index":
             dest.write_text(MEMORY_INDEX_TEMPLATE)
         elif action == "SPECIAL:memory_readme":
@@ -427,19 +488,38 @@ def generate_memory(memory_root, out_dir):
     return warns
 
 
+# Paths where a specific canary token is legitimate rather than leaked.
+# Deliberately narrow: each entry names the exact file AND the exact tokens
+# excused there, so a new leak elsewhere still fails the scan.
+CANARY_EXEMPT = {
+    # spawn.py DEFINES CANARY_TOKENS; that literal list is generator machinery.
+    # This is the ONLY unavoidable exemption: the token list has to exist
+    # somewhere, and this is where. Everything else must earn its place —
+    # `tests/` deliberately has NO entry here. The privacy test derives every
+    # token from CANARY_TOKENS at run time and uses fictional fixtures, so it
+    # scans clean on its own merits. Exempting it instead would let the test
+    # smuggle the very strings it exists to keep out (both spawn.py and
+    # tests/ are KEEP-copied verbatim into the public template).
+    "scripts/spawn.py": set(CANARY_TOKENS),
+    # The licence attributes copyright to a named human — that is the point of
+    # a licence, not leaked instance content.
+    "LICENSE": {"nightingale"},
+}
+
+
 def canary_scan(out_dir):
     hits = []
     for path in sorted(out_dir.rglob("*")):
         if not path.is_file():
             continue
-        # spawn.py itself defines CANARY_TOKENS; its token list is generator
-        # machinery, not instance content, so exclude it from its own scan.
-        if path.relative_to(out_dir).as_posix() == "scripts/spawn.py":
-            continue
+        rel = path.relative_to(out_dir).as_posix()
+        exempt = CANARY_EXEMPT.get(rel, set())
         text = path.read_text(errors="replace").lower()
         for token in CANARY_TOKENS:
+            if token in exempt:
+                continue
             if token in text:
-                hits.append(f"{path.relative_to(out_dir)}: '{token}'")
+                hits.append(f"{rel}: '{token}'")
     return hits
 
 

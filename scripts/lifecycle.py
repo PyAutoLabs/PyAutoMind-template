@@ -84,6 +84,35 @@ def ledger_slugs(path: Path) -> "set[str]":
     return slugs
 
 
+def _prune_ledger_section(path: Path, slug: str) -> bool:
+    """Drop the `## <slug>` H2 section (heading through the line before the
+    next H2, or EOF) from a ledger file. Returns True if a section was removed."""
+    if not path.exists():
+        return False
+    want = safe_name(slug)
+    lines = path.read_text(errors="replace").splitlines()
+    out: "list[str]" = []
+    i = 0
+    removed = False
+    while i < len(lines):
+        m = H2_RE.match(lines[i])
+        if m and safe_name(_slugify_h2(m.group(1))) == want:
+            removed = True
+            i += 1
+            while i < len(lines) and not H2_RE.match(lines[i]):
+                i += 1
+            while out and not out[-1].strip():
+                out.pop()
+            if i < len(lines):
+                out.append("")
+            continue
+        out.append(lines[i])
+        i += 1
+    if removed:
+        path.write_text("\n".join(out).rstrip("\n") + "\n")
+    return removed
+
+
 def complete_bucket(date: "tuple[str, str] | None") -> Path:
     if date is None:
         return COMPLETE_DIR / "unknown"
@@ -184,6 +213,11 @@ def cmd_record(args) -> int:
 
     print(f"record: {dest.relative_to(ROOT)}"
           + (f"  (+folds active/{prompt.name})" if prompt else ""))
+    slug_in_active_md = safe_name(args.slug) in {
+        safe_name(s) for s in ledger_slugs(ACTIVE_MD)
+    }
+    if slug_in_active_md:
+        print(f"active.md: will remove section for {safe_name(args.slug)!r}")
     if not args.apply:
         print("(dry run; pass --apply)")
         return 0
@@ -209,6 +243,15 @@ def cmd_record(args) -> int:
                    capture_output=True, text=True)
     print(f"index: refreshed {INDEX_MD.relative_to(ROOT)} "
           f"({len(_all_records())} records)")
+
+    # Prune the task's `## <slug>` section from the active.md registry in the
+    # same step — `check` fails ("finished but still active") on every later
+    # push to main while a shipped slug lingers there, and the manual registry
+    # edit in the ship skills was easy to forget (2026-07-30 email storm).
+    if _prune_ledger_section(ACTIVE_MD, args.slug):
+        subprocess.run(["git", "-C", str(ROOT), "add", str(ACTIVE_MD)],
+                       capture_output=True, text=True)
+        print(f"active.md: removed shipped section {safe_name(args.slug)!r}")
     return 0
 
 
