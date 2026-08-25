@@ -134,6 +134,8 @@ over the registry without starting work:
 ```
 PyAutoMind/
 ├── README.md                ← short front page
+├── dashboard.md             ← GENERATED task page (picks / in flight / parked / planned / backlog)
+│                              `pyauto-brain intake --apply dashboard`; CI self-heals it on main
 ├── REFERENCE.md             ← this file (schemas + conventions)
 ├── .gitignore
 │
@@ -298,10 +300,43 @@ Free-form markdown. Strong conventions:
   Autonomy: supervised      # safe | supervised | human-required
   Priority: normal          # low | normal | high
   Status: draft
+  Filed: 2026-07-09         # optional; the day the prompt was written
+  Issued: 2026-08-19        # optional; set when the prompt advances to active/
+  Blocked-by: PyAutoFit#1436          # optional; see "Declaring a gate" below
   ```
 
   When present, `Type:` should match the work-type folder. The goal is light
   structure, not bureaucracy — prompts stay free-form prose.
+
+  **Declaring a gate — `Closes-when:` / `Blocked-by:`.** Both optional. A prompt
+  that waits on something external can say so in a form `lifecycle.py issues
+  --drafts` can grade:
+
+  ```markdown
+  Closes-when: autolens_profiling#70    # this prompt is DONE when that closes
+  Blocked-by: PyAutoArray#431, PyAutoGalaxy#486   # READY TO START when all close
+  ```
+
+  The two readings are **opposite**, which is the whole point. Prose cannot be
+  graded, so a cited issue could mean either and `--drafts` had to report every
+  one as the same ambiguous question. With a declared key the tool reports the
+  action instead: a closed `Closes-when:` says *likely shipped, verify and
+  retire*; a closed `Blocked-by:` says *ready to start*. Prompts declaring a gate
+  drop out of the ambiguous advisory list.
+
+  Notes:
+  - Accepts `Repo#123` shorthand (assumed `PyAutoLabs/`) or a full URL, and PRs
+    as well as issues. Several refs may be comma-separated.
+  - `Blocked-by:` clears only when **every** ref closes; a partly-satisfied gate
+    is reported in its own weaker band rather than as ready.
+  - Keys inside fenced code blocks are documentation and are ignored, so a prompt
+    may show the syntax without declaring a gate.
+  - Advisory, never a gate on the exit code: retiring a prompt writes to
+    `complete/` and stays a human act.
+
+  Motivated by the 2026-08-09 `draft/` sweep, where five prompts' stated gates
+  had closed without anyone noticing — including one whose exit condition was met
+  the same day it was written.
 
   The optional `Difficulty:` / `Autonomy:` / `Priority:` keys let both people and
   PyAutoBrain see, at a glance, how hard a task is, whether an agent can safely
@@ -321,6 +356,7 @@ Each task is an H2 section:
 ```markdown
 ## <task-name-kebab-case>
 - issue: https://github.com/<owner>/<repo>/issues/<n>
+- issued: YYYY-MM-DD                              # the day the task was issued
 - session: claude --resume <session-id>           # optional
 - status: <library-dev | workspace-dev | ready-to-ship | awaiting-input | …>
 - location: <cli-in-progress | ready-for-mobile | …>   # optional, used by /handoff
@@ -341,6 +377,72 @@ Each task is an H2 section:
 - summary: |
     Free-form summary of progress and next steps.
 ```
+
+### Task dates
+
+The Mind used to date only what it **finished** — every completion record
+carries `completed:` — so it could answer "what shipped in July?" but not "what
+did we start?". Every task now carries a machine-readable date from the moment
+it leaves the backlog:
+
+| Where | Field | The event it dates |
+|-------|-------|--------------------|
+| `active.md` | `- issued: YYYY-MM-DD` | the day the task got its GitHub issue |
+| `planned.md` | `- filed: YYYY-MM-DD` | the day it was scoped |
+| `parked.md` | `- parked: YYYY-MM-DD` | the day it stopped |
+| `draft/**/<name>.md` | `Filed: YYYY-MM-DD` | the day the prompt was written |
+| `active/<name>.md` | `Issued: YYYY-MM-DD` | the day it got its issue, in its light header |
+| `complete/<YYYY>/<MM>/<slug>.md` | `- completed: YYYY-MM-DD` | unchanged — the ledger already did this |
+
+The backlog is the **largest** pool of tasks the Mind holds — 150 prompts
+against a handful of live rows — so `draft/` carrying a date is what lets the
+dashboard's Recent feed see most of the work at all. A prompt keeps its
+`Filed:` when it advances to `active/` and gains an `Issued:`; the later, more
+specific event is the one that dates the task.
+
+The **key names the event**, so a merged feed can say what each date means
+rather than showing a bare timestamp. Reading is tolerant: `registered:`,
+`started:`, `planned:`, `found:` and `shipped:` are all read as dates too (the
+registries are hand-edited by many sessions, and an entry that says when it
+happened should count however it said it) — the table is what a *writer*
+should use. The most specific event wins when an entry carries several, so a
+task that was filed and later issued dates from its issue.
+
+A date inside another field's prose (`- issue: …/1501 (issued 2026-08-19)`) is
+deliberately **not** read — that is the un-parseable habit this convention
+replaces. The prompt's `Issued:` header is its own copy of the registry date,
+so an issued prompt stays dated even if its registry row goes missing.
+
+`scripts/lifecycle.py dates` reports every entry and issued prompt carrying no
+date; `dates --write` backfills them retroactively from the evidence the repo
+already holds, annotating each inferred date with where it came from:
+
+```
+Issued: 2026-08-18 (backfilled from parked.md `parked:`)
+```
+
+The sources, in order: git — the commit that introduced the entry, wrote the
+draft, or moved the prompt into `active/`; the prompt's own Intake trailer
+(`<!-- formalised by the Intake (Conception) Agent on … -->`); the dated
+registry entry that claims the prompt; a date the entry already stated in its
+own prose.
+
+The two states want **opposite** readings of the same history, and the switch is
+`--follow`. An `active/` prompt dates from the day it *arrived* there (being
+issued is a `git mv`, so following the rename back would report the wrong day);
+a `draft/` prompt dates from the day it was *written*, wherever it lived then —
+the 2026-07-13 lifecycle migration `git mv`-ed 42 prompts in one commit, and
+without `--follow` all 42 would date from the migration rather than from
+themselves. Nothing is guessed — an entry with no
+evidence is reported for a human to date by hand. A **shallow** clone (CI, a
+cloud session) cannot see past its boundary commit, so git dates at or before
+it are discarded rather than stamping every task with the day the clone was
+made.
+
+The dashboard's [Recent](dashboard.md#recent) table is the payoff: it holds the
+50 newest events on the work in hand — issued, parked, filed — and shows 10,
+opening the next 10 on each tap of `…`. Shipped work stays out of it;
+`complete/index.md` is where the ledger is read.
 
 ### Completion record (`complete/<YYYY>/<MM>/<slug>.md`) schema
 
@@ -399,7 +501,7 @@ The PyAuto workflow has three repos with distinct roles:
 |------|---------|
 | **PyAutoMind** (this repo) | The Mind: ideas, intent, goals, priorities, the prompt registry and prompt-coupled skills. The starting point. |
 | **admin_jammy** | Personal admin notes only (`euclid.md`, `grants.md`, `week.md`, `travel.md`, …). Formerly also held PyAuto tooling under `software/`; that has moved out (worktree/label scripts → `PyAutoBrain/bin/`, generic skills → Brain/Heart). |
-| **PyAutoMemory** | The Memory organ: topical LLM wikis (`lensing_wiki/`, `smbh_wiki/`, `cti_wiki/`, `methods_wiki/`, `galaxies_wiki/`) and a reading queue (`reading-queue.md`, moved from `admin_jammy/papers.md`). |
+| **PyAutoMemory** | The Memory organ: topical LLM wikis (`wiki/lensing/`, `wiki/smbh/`, `wiki/cti/`, `wiki/methods/`, `wiki/galaxies/`) and a reading queue (`reading-queue.md`, moved from `admin_jammy/papers.md`). |
 | **`PyAuto*` libraries and `*_workspace*` repos** | Where the actual code work happens. Each task gets a feature branch + worktree under `~/Code/PyAutoLabs-wt/<task-name>/`. |
 
 Helper scripts that this repo's skills source:

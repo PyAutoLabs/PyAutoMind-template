@@ -45,6 +45,28 @@ _prompt_sync_require_repo() {
   fi
 }
 
+# Push the checkout's CURRENT branch — never a hardcoded `main`.
+#
+# Both helpers below used to end in `git push origin main` regardless of what
+# was checked out. `create_issue` step 6 and `start_dev` step 7 both instruct an
+# agent to call them, so a branch-scoped session (a cloud session with a
+# designated branch, or any PR-based flow) that followed the documented steps
+# verbatim pushed Mind straight to `main`, bypassing review entirely.
+#
+# Pushing HEAD leaves the single-branch laptop flow byte-identical — there the
+# current branch IS `main` — while making a branch-scoped checkout do the right
+# thing instead of the dangerous thing.
+_prompt_sync_push_current() {
+  local branch
+  branch=$(git -C "$PROMPT_REPO" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  if [ -z "$branch" ] || [ "$branch" = "HEAD" ]; then
+    echo "prompt_sync: refusing to push from a detached HEAD in $PROMPT_REPO" >&2
+    echo "  check out a branch first." >&2
+    return 1
+  fi
+  git -C "$PROMPT_REPO" push -u origin "$branch"
+}
+
 # Commit and push any new untracked .md files at the repo root or under
 # category dirs as one "sync new task ideas" commit. Each new file is listed
 # individually in the commit body so the history shows which prompts arrived.
@@ -69,8 +91,8 @@ prompt_sync_new_prompts() {
   body=$(echo "$untracked" | sed 's/^/- /')
 
   ( cd "$PROMPT_REPO" && git add -- $untracked && \
-    git commit -m "$(printf 'prompt: sync new task ideas\n\n%s\n' "$body")" && \
-    git push origin main )
+    git commit -m "$(printf 'prompt: sync new task ideas\n\n%s\n' "$body")" ) && \
+  _prompt_sync_push_current
 }
 
 # Stage any modifications under the repo, commit with the given subject,
@@ -79,9 +101,12 @@ prompt_sync_new_prompts() {
 prompt_sync_push() {
   _prompt_sync_require_repo || return 1
   local subject="${1:-prompt: sync PyAutoMind}"
-  ( cd "$PROMPT_REPO" && \
-    git add -A && \
-    if git diff --cached --quiet; then return 0; fi && \
-    git commit -m "$subject" && \
-    git push origin main )
+  git -C "$PROMPT_REPO" add -A || return 1
+  # Still a no-op when nothing is staged — the early return must come BEFORE the
+  # push, or a caller with no changes would push anyway.
+  if git -C "$PROMPT_REPO" diff --cached --quiet; then
+    return 0
+  fi
+  git -C "$PROMPT_REPO" commit -m "$subject" || return 1
+  _prompt_sync_push_current
 }
