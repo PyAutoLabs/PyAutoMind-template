@@ -1,15 +1,10 @@
-# PyAuto workflow skill ownership — audit + relocation
+# PyAuto workflow skill ownership
 
-Originally an **ownership/location audit** (PR #26); this version records the
-**completed relocation** done by the skill-redesign task (`autoprompt/skill_redesign.md`).
-Each workflow skill now lives in the organ that owns its responsibility, command
-names preserved, discovery wired up via `PyAutoBrain/bin/install.sh`.
-
-## What moved (and why)
-
-Ownership reconciled with the **actual** organism boundary docs
-(`PyAutoBrain/AGENTS.md`, `PyAutoHands/AGENTS.md`), not the aspirational mapping
-in `skill_redesign.md`:
+Where each workflow skill lives and why. Each skill lives in the organ that
+owns its responsibility (boundaries: `PyAutoBrain/AGENTS.md`,
+`PyAutoHands/AGENTS.md`); command names are preserved across homes, and
+discovery is wired up by `PyAutoBrain/bin/install.sh`. The relocation history
+behind this layout is in git (PR #26 and the skill-redesign task, 2026-07).
 
 - **Mind** = intent + task-registry state.
 - **Memory** = accumulated knowledge (consulted for context).
@@ -19,87 +14,43 @@ in `skill_redesign.md`:
   via `release.yml`). It owns **no** workflow skills; `ship_*` is feature-dev work
   that only *calls* Build's release step at release time.
 
-| Skill | New home | Recommended owner | Action taken |
-|-------|----------|-------------------|--------------|
-| `create_issue` | `PyAutoMind/skills/` | **PyAutoMind** — the issue+registry **primitive** (Brain's `start-dev` delegates the issue write to it; runnable standalone) | kept in Mind |
-| `start_dev` | `PyAutoBrain/skills/` | **PyAutoBrain** (classification/routing entry) | **moved → Brain** |
-| `start_dev_for_user` | `PyAutoBrain/skills/` | **PyAutoBrain** (routing variant) | **moved → Brain** |
-| `plan_branches` | `PyAutoBrain/skills/` | **PyAutoBrain** (planning) | **moved → Brain** |
-| `start_library` | `PyAutoBrain/skills/` | **PyAutoBrain** (dev-cycle setup) | **moved → Brain** |
-| `start_workspace` | `PyAutoBrain/skills/` | **PyAutoBrain** (dev-cycle setup) | **moved → Brain** |
-| `ship_library` | `PyAutoBrain/skills/` | **PyAutoBrain** dev-workflow → Heart gate (Build only at release) | **moved → Brain** |
-| `ship_workspace` | `PyAutoBrain/skills/` | **PyAutoBrain** dev-workflow → Heart gate (Build only at release) | **moved → Brain** |
-| `register_and_iterate` | `PyAutoBrain/skills/` | **PyAutoBrain** (dev-workflow orchestration loop) | **moved → Brain** |
-| `repo_cleanup` | `PyAutoBrain/skills/` | **PyAutoBrain** (between-tasks git hygiene; Heart observes, Brain decides + executes — natural home is a future Cleanup Agent) | **moved → Brain** (from admin_jammy) |
-| `pyauto-status` | `PyAutoHeart/skills/` | **PyAutoHeart** (active-work dashboard) | **retired as command -> `$health status` leg (`/health status` in Claude; `pyauto-status/reference.md`)** |
-| `pyauto-status-full` | `PyAutoHeart/skills/` | **PyAutoHeart** (release-run dashboard) | **retired as command -> `$health full` leg (`/health full` in Claude; `pyauto-status-full/reference.md`)** |
-| `worktree_status` | `PyAutoHeart/skills/` | **PyAutoHeart** (diagnostic) | **moved → Heart** |
-| `profile_likelihood` | `autolens_profiling/skills/` | **`autolens_profiling`** (science profiling) | **moved → autolens_profiling** |
-| `handoff` | — (removed) | — | **deleted** — the phone↔laptop park/resume dance is obsolete now PyAutoBrain runs uniformly across execution environments; `active.md` is the shared task state, so any environment resumes a task directly |
+| Skill | Home | Why it lives there |
+|-------|------|--------------------|
+| `create_issue` | `PyAutoMind/skills/` | the issue+registry **primitive** (Brain's `start-dev` delegates the issue write to it; runnable standalone) |
+| `spawn` | `PyAutoMind/skills/` | template generation from the Mind's own tree |
+| `start_dev`, `start_dev_for_user` | `PyAutoBrain/skills/` | classification/routing entry points |
+| `plan_branches`, `start_library`, `start_workspace` | `PyAutoBrain/skills/` | planning + dev-cycle setup |
+| `ship_library`, `ship_workspace` | `PyAutoBrain/skills/` | dev-workflow → Heart gate (Build only at release) |
+| `register_and_iterate`, `run_queue` | `PyAutoBrain/skills/` | dev-workflow orchestration loops |
+| `repo_cleanup`, `update_issue` | `PyAutoBrain/skills/` | between-tasks git hygiene / issue upkeep |
+| `worktree_status` | `PyAutoHeart/skills/` | diagnostic |
+| `dep_audit`, `verify_install`, `review_release`, `audit_docs`, `cli_noise_clean` | `PyAutoHeart/skills/` | read-only validation / readiness checks |
+| `pre_build` | `PyAutoHands/skills/` | release execution (the only skill class Hands owns) |
+| `profile_likelihood` | `autolens_profiling/skills/` | science profiling |
 
-### Second wave — general admin_jammy skills
+Retired: `pyauto-status` / `pyauto-status-full` became legs of `$health`
+(`/health status`, `/health full`; long-form detail in their `reference.md`
+files under `PyAutoHeart/skills/`); `handoff` was deleted — `active.md` is the
+shared task state, so any environment resumes a task directly.
 
-A follow-up pass re-homed the remaining admin_jammy skills so `admin_jammy/`
-trends toward installer + tooling only:
+## Discovery
 
-- **→ PyAutoHeart** (read-only validation/readiness checks): `dep_audit`,
-  `verify_install`, `review_release`, `audit_docs`, `cli_noise_clean`.
-- **→ PyAutoBrain** (dev-workflow): `update_issue`, `repo_cleanup`.
-- **→ PyAutoHands** (release execution): `pre_build`. PyAutoHands now has a
-  `skills/` root for its **release-execution** skills only — it still owns no
-  dev-workflow skills (`ship_*` live in Brain and only *call* its release step).
-- **Removed:** `start-new-project` was a duplicate of the canonical science-project
-  skill already owned by `autolens_assistant` (`skills/start-new-project.md`),
-  so the admin_jammy fork was deleted rather than moved.
-
-After this, `admin_jammy/skills/` hosts **no skills** — only the installer
-(`install.sh`) and the line-count guard (`check_skill_line_counts.sh`).
+`PyAutoBrain/bin/install.sh` scans the `skills/` roots above, symlinks skills
+into both Claude and Codex skill homes, and preserves commands in
+`~/.claude/commands/`. Registry references stay workspace-root-anchored
+(`PyAutoMind/active.md`, `PyAutoMind/complete/`,
+`source PyAutoMind/scripts/prompt_sync.sh`), which resolve from any sibling
+repo, so skills work identically from every home.
 
 (`*/agents/openai.yaml` and the `SKILL.md` ↔ `<name>.md` pairs are bundled Codex
-agent configs / dispatcher+body pairs, not separate skills. Long-form detail was
+agent configs / dispatcher+body pairs, not separate skills. Long-form detail is
 factored into per-skill `reference.md` files and the shared
 `PyAutoBrain/skills/WORKFLOW.md`, keeping every primary skill file under 200
 lines.)
 
-## Discovery
-
-`PyAutoBrain/bin/install.sh` now scans these roots, symlinks skills into both
-Claude and Codex skill homes, and preserves commands in `~/.claude/commands/`:
-
-- `admin_jammy/skills/` — general PyAuto tooling
-- `PyAutoMind/skills/` — registry-coupled (`create_issue`)
-- `PyAutoBrain/skills/` — development-workflow
-- `PyAutoHeart/skills/` — status / readiness
-- `PyAutoHands/skills/` — release execution
-- `autolens_profiling/skills/` — science profiling
-
-**PyAutoHands's `skills/` root holds release-execution skills only** (`pre_build`)
-— it owns no *dev-workflow* skills; `ship_*` live in Brain and only call its
-release step. Registry
-references stay workspace-root-anchored (`PyAutoMind/active.md`,
-`PyAutoMind/complete/`, `source PyAutoMind/scripts/prompt_sync.sh`), which
-resolve from any sibling repo, so the moved skills keep working unchanged.
-
-## Redesign summary
-
-The moves were paired with the redesign in `autoprompt/skill_redesign.md`:
-
-- Skills are **thin entry points** that delegate to the organism — Brain reasons
-  and routes (Feature/Build/Health agents), Heart gates ship via
-  `pyauto-heart readiness`, Build executes release only, Mind holds state, Memory
-  supplies context.
-- `start_dev` routes through the **Feature Agent** (+ Memory); `ship_*` gates
-  through the **Health Agent → Heart** before the dev workflow commits/pushes/PRs.
-- "Remote / mobile mode" is gone, replaced by the general execution-environment
-  model (`local-dev` / `web-github` / `ci-only` / `analysis-only`) in
-  `PyAutoBrain/skills/WORKFLOW.md`. No phone↔laptop handoff concept remains.
-- Command names and the start/ship lifecycle are preserved.
-
 ## Validation
 
-- `bash PyAutoBrain/bin/install.sh` → every moved `/command` resolves.
+- `bash PyAutoBrain/bin/install.sh` → every `/command` resolves.
 - `find <each skills dir> -type l` → no stray symlinks in source.
 - `bash PyAutoBrain/bin/check_skill_line_counts.sh` → all primary workflow
   skill files within 200 lines.
-- Grep for stale `PyAutoMind/skills/` workflow paths and mobile/remote-mode terms
-  → clean across the moved skills.
