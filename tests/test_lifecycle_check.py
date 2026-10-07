@@ -19,6 +19,7 @@ Two things these tests deliberately do, matching `test_repos_sync_hygiene_covera
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -759,3 +760,494 @@ def test_an_undeclared_draft_still_gets_the_ambiguous_advisory(tmp_path):
     notes = lifecycle.draft_issue_notes(tmp_path, fetch=_states({GATE_ISSUE: "closed"}))
     assert len(notes) == 1
     assert "shipped, or newly unblocked?" in notes[0]
+
+
+# --------------------------------------------------------------------------- #
+# the PR ledger: `library-pr:` / `workspace-pr:` / `pending-release:`
+#
+# The keys were written by ship_library and read by /prm long before anything
+# validated them, so a row could declare `status: awaiting-merge` and name no
+# PR at all. Fictional repos throughout (see the module docstring).
+# --------------------------------------------------------------------------- #
+def _as_root(monkeypatch, root: Path):
+    """Point `cmd_check`'s module-level paths at a fixture tree.
+
+    `check` reads ROOT/ACTIVE_MD/COMPLETE_DIR/ACTIVE_DIR as globals (it is a
+    CLI, not a library), so a hermetic run has to rebind them."""
+    monkeypatch.setattr(lifecycle, "ROOT", root)
+    monkeypatch.setattr(lifecycle, "ACTIVE_MD", root / "active.md")
+    monkeypatch.setattr(lifecycle, "ACTIVE_DIR", root / "active")
+    monkeypatch.setattr(lifecycle, "COMPLETE_DIR", root / "complete")
+    monkeypatch.setattr(lifecycle, "ARCHIVE_DIR", root / "complete" / "archive")
+
+
+GADGET_PR = "https://github.com/ExampleOrg/Gadgets/pull/12"
+WIDGET_PR = "https://github.com/ExampleOrg/Widgets/pull/34"
+SPROCKET_PR = "https://github.com/ExampleOrg/Sprockets/pull/56"
+
+
+def test_a_row_claiming_open_prs_and_naming_none_is_drift(tmp_path):
+    _tree(tmp_path, registries={
+        "active.md": ("# Active\n\n## flywheel-rebuild\n"
+                      "- status: library-shipped, awaiting-merge\n")})
+    problems = lifecycle.pr_key_problems(tmp_path)
+    assert len(problems) == 1
+    assert "flywheel-rebuild" in problems[0]
+    assert "library-pr" in problems[0]
+
+
+def test_the_pr_keys_are_repeatable_one_line_each(tmp_path):
+    """A task may ship several PRs of one kind; `registry_entries` keeps only
+    the first occurrence of a key, so the check needs its own repeat-tolerant
+    parse or it would read a three-PR row as a one-PR row."""
+    _tree(tmp_path, registries={
+        "active.md": ("# Active\n\n## flywheel-rebuild\n"
+                      "- status: library-shipped, awaiting-merge\n"
+                      f"- library-pr: {GADGET_PR}\n"
+                      f"- library-pr: {WIDGET_PR}\n"
+                      f"- workspace-pr: {SPROCKET_PR}\n")})
+    assert lifecycle.pr_key_problems(tmp_path) == []
+    _, multi = lifecycle.registry_multi(tmp_path / "active.md")[0]
+    assert lifecycle.pr_urls(multi["library-pr"]) == [GADGET_PR, WIDGET_PR]
+
+
+def test_the_older_single_line_comma_form_still_counts(tmp_path):
+    """Rows written before the key was schematised must not start failing."""
+    _tree(tmp_path, registries={
+        "active.md": ("# Active\n\n## flywheel-rebuild\n"
+                      "- status: shipped\n"
+                      f"- library-pr: {GADGET_PR}, {WIDGET_PR}\n")})
+    assert lifecycle.pr_key_problems(tmp_path) == []
+
+
+def test_a_row_still_in_development_needs_no_pr_key(tmp_path):
+    """The rule keys off the status DECLARING the PRs exist — an in-flight row
+    that has not shipped anything yet is not withholding a thing."""
+    _tree(tmp_path, registries={
+        "active.md": ("# Active\n\n## flywheel-rebuild\n"
+                      "- status: library-dev\n")})
+    assert lifecycle.pr_key_problems(tmp_path) == []
+
+
+def test_the_pr_key_rule_is_wired_into_check(tmp_path, monkeypatch, capsys):
+    """`check` must exit 1 on it — a rule nothing runs is decoration."""
+    _tree(tmp_path, registries={
+        "active.md": ("# Active\n\n## flywheel-rebuild\n"
+                      "- status: awaiting-merge\n")})
+    _as_root(monkeypatch, tmp_path)
+    assert lifecycle.cmd_check(None) == 1
+    assert "flywheel-rebuild" in capsys.readouterr().out
+
+
+def _record(root: Path, rel: str, body: str):
+    p = root / "complete" / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body)
+    return p
+
+
+def test_a_long_uncleared_pending_release_is_a_warning_not_drift(tmp_path):
+    _record(tmp_path, "2026/01/flywheel_rebuild.md",
+            "## flywheel-rebuild\n"
+            "- completed: 2026-01-01\n"
+            f"- pending-release: Gadgets@{GADGET_PR}\n")
+    notes = lifecycle.pending_release_problems(tmp_path, today="2026-03-01")
+    assert len(notes) == 1 and "uncleared" in notes[0]
+    # Fresh enough is silent: the key's whole meaning is "not released yet".
+    assert lifecycle.pending_release_problems(tmp_path, today="2026-01-10") == []
+
+
+def test_the_appended_original_prompt_is_not_read_as_the_records_own_fields(tmp_path):
+    """`lifecycle.py record` appends the starting prompt verbatim, and that
+    prompt may quote another task's keys. Reading past the boundary would
+    invent a pending release the record never had."""
+    _record(tmp_path, "2026/01/flywheel_rebuild.md",
+            "## flywheel-rebuild\n"
+            "- completed: 2026-01-01\n"
+            "- summary: shipped clean\n"
+            "\n## Original prompt\n\n"
+            f"- pending-release: Gadgets@{GADGET_PR}\n")
+    assert lifecycle.pending_release_problems(tmp_path, today="2026-06-01") == []
+
+
+def test_check_reports_a_stale_pending_release_and_still_exits_zero(tmp_path,
+                                                                    monkeypatch,
+                                                                    capsys):
+    _record(tmp_path, "2026/01/flywheel_rebuild.md",
+            "## flywheel-rebuild\n"
+            "- completed: 2026-01-01\n"
+            f"- pending-release: Gadgets@{GADGET_PR}\n")
+    _as_root(monkeypatch, tmp_path)
+    # The fictional repo must be in the published set, or the line is drift.
+    monkeypatch.setattr(lifecycle, "PUBLISHED_REPOS", ("Gadgets",))
+    assert lifecycle.cmd_check(None) == 0
+    out = capsys.readouterr().out
+    assert "warning" in out and "pending-release" in out
+
+
+# --------------------------------------------------------------------------- #
+# the batch ledger
+#
+# `batches/<date>-<slot>.md` is the record of one unattended shift and the
+# evidence base the review-minute budget is calibrated from. Nothing checked
+# it: a member could cite a prompt path nobody ever wrote, and a closed record
+# could carry no measured review cost at all.
+# --------------------------------------------------------------------------- #
+def _batch_record(root: Path, name: str, *members, keys=""):
+    d = root / "batches"
+    d.mkdir(parents=True, exist_ok=True)
+    body = ["# Batch " + name, "",
+            "- dispatched: 2026-01-01T17:40Z",
+            "- review-at: 2026-01-02T08:00Z",
+            "- members:"]
+    body += list(members)
+    if keys:
+        body.append(keys)
+    body += ["- notes: |", "    - members: this line is prose, not a key"]
+    (d / f"{name}.md").write_text("\n".join(body) + "\n")
+    return d / f"{name}.md"
+
+
+MEMBER = ("  - widget-polish: draft/feature/widgets/polish.md — glance — 3 — "
+          "DELIVERED (Gadgets#12, 4/4 checks green)")
+
+
+def test_a_member_citing_a_prompt_that_was_never_here_is_drift(tmp_path):
+    """The member's question and its pre-registered witness are read from that
+    file at collect. A path nobody ever wrote makes the member unreadable, and
+    the record wrong about what it dispatched."""
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER)
+    problems = lifecycle.batch_member_problems(tmp_path)
+    assert len(problems) == 1
+    assert "widget-polish" in problems[0]
+    assert "draft/feature/widgets/polish.md" in problems[0]
+
+
+def test_a_member_prompt_still_in_draft_is_not_drift(tmp_path):
+    _tree(tmp_path, draft=("feature/widgets/polish.md",))
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER)
+    assert lifecycle.batch_member_problems(tmp_path) == []
+
+
+def test_a_member_prompt_issued_into_active_is_not_drift(tmp_path):
+    """The record names where the prompt was AT DISPATCH; the lifecycle moves
+    it the moment the issue opens."""
+    _tree(tmp_path, active=("polish.md",))
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER)
+    assert lifecycle.batch_member_problems(tmp_path) == []
+
+
+def test_a_member_prompt_retired_into_complete_is_not_drift(tmp_path):
+    _tree(tmp_path, complete=("2026/01/polish.md",))
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER)
+    assert lifecycle.batch_member_problems(tmp_path) == []
+
+
+def test_a_prompt_absorbed_into_its_record_is_not_drift(tmp_path):
+    """A completion record is filed under the TASK's name and the prompt file
+    is gone, so the member's path resolves nowhere on disk. Git is the only
+    thing that tells that apart from a path nobody ever wrote."""
+    import shutil
+    import subprocess
+    if not shutil.which("git"):
+        import pytest
+        pytest.skip("no git")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email",
+                    "t@example.com"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"],
+                   check=True)
+    _tree(tmp_path, draft=("feature/widgets/polish.md",))
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-qm", "filed"],
+                   check=True)
+    (tmp_path / "draft" / "feature" / "widgets" / "polish.md").unlink()
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER)
+    assert lifecycle.batch_member_problems(tmp_path) == []
+
+
+def test_a_member_line_that_is_not_the_grammar_is_left_alone(tmp_path):
+    """A hand submission has a sentence where the path goes. Reporting it as a
+    missing prompt would be reporting the wrong thing."""
+    _batch_record(tmp_path, "2026-01-01-pm",
+                  "  - hand-run-42: (no prompt — hand submission) — notify — "
+                  "1 — UNREVIEWED, carried to the next packet")
+    assert lifecycle.batch_member_problems(tmp_path) == []
+
+
+def test_prose_below_the_members_block_is_not_a_member(tmp_path):
+    """The member list ends at the first key that is not `members:` — the
+    `notes: |` body of every real record quotes member-shaped lines."""
+    _tree(tmp_path, draft=("feature/widgets/polish.md",))
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER,
+                  keys="- collected: 2026-01-02T08:30Z")
+    assert lifecycle.batch_member_problems(tmp_path) == []
+
+
+def test_the_agents_page_is_not_a_batch_record(tmp_path):
+    (tmp_path / "batches").mkdir()
+    (tmp_path / "batches" / "AGENTS.md").write_text(
+        "# Batch records\n\n- members:\n" + MEMBER + "\n")
+    assert lifecycle.batch_records(tmp_path) == []
+
+
+def test_a_closed_record_with_no_measured_review_cost_warns(tmp_path):
+    """`review-minutes-actual:` is "the only calibration there is" — without it
+    the budget every batch is planned against never improves."""
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER,
+                  keys="- review: batches/reviews/2026-01-01-pm.md")
+    warnings = lifecycle.batch_record_warnings(tmp_path)
+    assert len(warnings) == 1
+    assert "review-minutes-actual" in warnings[0]
+
+
+def test_the_placeholder_counts_as_no_measurement(tmp_path):
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER,
+                  keys=("- reviewed-at: 2026-01-02T08:30Z\n"
+                        "- review-minutes-actual: (not given)"))
+    assert len(lifecycle.batch_record_warnings(tmp_path)) == 1
+
+
+def test_a_measured_review_cost_silences_the_warning(tmp_path):
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER,
+                  keys=("- review: batches/reviews/2026-01-01-pm.md\n"
+                        "- review-minutes-actual: 38"))
+    assert lifecycle.batch_record_warnings(tmp_path) == []
+
+
+def test_an_open_slot_is_not_warned_about(tmp_path):
+    """The number is written after the review. A record whose review has not
+    landed is not missing anything."""
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER)
+    assert lifecycle.batch_record_warnings(tmp_path) == []
+
+
+def test_check_fails_on_a_bad_member_path_and_warns_on_the_minutes(
+        tmp_path, monkeypatch, capsys):
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER,
+                  keys="- review: batches/reviews/2026-01-01-pm.md")
+    _as_root(monkeypatch, tmp_path)
+    assert lifecycle.cmd_check(None) == 1
+    out = capsys.readouterr().out
+    assert "widget-polish" in out
+    assert "warning" in out and "review-minutes-actual" in out
+
+
+def test_check_stays_quiet_on_a_clean_batch_ledger(tmp_path, monkeypatch,
+                                                   capsys):
+    _tree(tmp_path, draft=("feature/widgets/polish.md",))
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER,
+                  keys=("- review: batches/reviews/2026-01-01-pm.md\n"
+                        "- review-minutes-actual: 38"))
+    _as_root(monkeypatch, tmp_path)
+    assert lifecycle.cmd_check(None) == 0
+    assert capsys.readouterr().out.strip() == "lifecycle check: OK"
+
+
+def _shallow(monkeypatch, boundary="2026-01-01"):
+    """Make the check believe it is reading a depth-1 clone."""
+    monkeypatch.setattr(lifecycle, "_shallow_boundary", lambda root: boundary)
+
+
+def test_a_shallow_clone_cannot_call_a_member_path_fabricated(tmp_path,
+                                                              monkeypatch):
+    """CI checks out at depth 1, where `git log -- <path>` reports nothing for
+    every prompt written before the boundary — seven absorbed 2026-08-31-pm
+    members would read as fabricated."""
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER)
+    _shallow(monkeypatch)
+    assert lifecycle.batch_member_problems(tmp_path) == []
+
+
+def test_a_shallow_clone_says_so_once(tmp_path, monkeypatch):
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER)
+    _shallow(monkeypatch)
+    notes = lifecycle.batch_member_notes(tmp_path)
+    assert len(notes) == 1 and "shallow" in notes[0]
+
+
+def test_a_full_clone_has_nothing_to_say_about_shallowness(tmp_path):
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER)
+    assert lifecycle.batch_member_notes(tmp_path) == []
+
+
+def test_a_shallow_clone_with_a_resolvable_ledger_is_quiet(tmp_path,
+                                                           monkeypatch):
+    _tree(tmp_path, draft=("feature/widgets/polish.md",))
+    _batch_record(tmp_path, "2026-01-01-pm", MEMBER)
+    _shallow(monkeypatch)
+    assert lifecycle.batch_member_notes(tmp_path) == []
+
+
+# --------------------------------------------------------------------------- #
+# `check --paths` — the diff-scoped run
+#
+# `check` grades the whole repo, which is right on main and wrong on a branch:
+# `mind_ledger_merge.yml` runs it over the merged tree, so a ledger branch that
+# added three records was refused for an unrelated `active.md` row that carried
+# no PR key — drift the branch neither caused nor could fix. `--paths` grades
+# only the findings ABOUT the branch's own files; everything else prints as
+# `~ out of scope` and leaves the exit code alone.
+#
+# Fictional fixtures throughout (see the module docstring).
+# --------------------------------------------------------------------------- #
+def _scoped(paths=(), base=None):
+    """The argparse namespace `cmd_check` reads its flags off."""
+    return SimpleNamespace(paths=list(paths), base=base)
+
+
+def _two_rows(tmp_path: Path, extra: str = "") -> Path:
+    """Two in-flight tasks. The second declares open PRs and names none —
+    drift, and nothing to do with the first."""
+    return _tree(
+        tmp_path,
+        active=["widget_alignment.md", "flywheel_rebuild.md"],
+        registries={"active.md": (
+            "# Active\n\n"
+            "## widget-alignment\n"
+            "- status: library-dev\n"
+            "- prompt: active/widget_alignment.md\n"
+            "\n"
+            "## flywheel-rebuild\n"
+            "- status: awaiting-merge\n"
+            "- prompt: active/flywheel_rebuild.md\n" + extra)},
+    )
+
+
+def test_without_paths_the_whole_repo_is_still_graded(tmp_path, monkeypatch,
+                                                      capsys):
+    """The unscoped behaviour is the contract every caller already has."""
+    _two_rows(tmp_path)
+    _as_root(monkeypatch, tmp_path)
+    assert lifecycle.cmd_check(_scoped()) == 1
+    out = capsys.readouterr().out
+    assert "flywheel-rebuild" in out
+    assert "out of scope" not in out
+
+
+def test_paths_on_the_healthy_tasks_files_passes_and_reports_the_rest(
+        tmp_path, monkeypatch, capsys):
+    """The branch that only touched the healthy task must merge."""
+    _two_rows(tmp_path)
+    _as_root(monkeypatch, tmp_path)
+    assert lifecycle.cmd_check(_scoped(["active/widget_alignment.md"])) == 0
+    out = capsys.readouterr().out
+    # reported, so nothing is hidden — but not as this branch's problem
+    assert "~ out of scope: active.md: flywheel-rebuild" in out
+    assert "scoped to 1 path(s)" in out
+
+
+def test_paths_on_the_broken_tasks_files_still_fails(tmp_path, monkeypatch,
+                                                     capsys):
+    """Scoping must not be a way to launder your own drift."""
+    _two_rows(tmp_path)
+    _as_root(monkeypatch, tmp_path)
+    assert lifecycle.cmd_check(_scoped(["active/flywheel_rebuild.md"])) == 1
+    assert "flywheel-rebuild" in capsys.readouterr().out
+
+
+def test_a_listed_directory_covers_what_is_under_it(tmp_path, monkeypatch):
+    _two_rows(tmp_path)
+    _as_root(monkeypatch, tmp_path)
+    assert lifecycle.cmd_check(_scoped(["active"])) == 1
+
+
+def test_the_record_a_branch_wrote_scopes_in_its_own_stale_row(
+        tmp_path, monkeypatch, capsys):
+    """The close-out case, and the reason entries resolve by slug as well as by
+    `prompt:`: a branch that files a record and forgets to drop the row is
+    answerable for that row, though it never named `active.md` in --paths."""
+    root = _two_rows(tmp_path)
+    rec = root / "complete" / "2026" / "09" / "flywheel-rebuild.md"
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    rec.write_text("## flywheel-rebuild\n- completed: 2026-09-01\n")
+    _as_root(monkeypatch, tmp_path)
+    assert lifecycle.cmd_check(
+        _scoped(["complete/2026/09/flywheel-rebuild.md"])) == 1
+    assert "finished but still active" in capsys.readouterr().out
+
+
+def test_a_listed_registry_file_puts_all_its_entries_in_scope_without_base(
+        tmp_path, monkeypatch):
+    """Documented fallback: with no `--base` there is no way to tell which rows
+    the diff touched, so naming the file answers for all of them."""
+    _two_rows(tmp_path)
+    _as_root(monkeypatch, tmp_path)
+    assert lifecycle.cmd_check(_scoped(["active.md"])) == 1
+
+
+def _stub_git(monkeypatch, diff: "list[str]"):
+    """`_git` answering a rev-parse probe and one `diff --unified=0`."""
+    def fake(root, args):
+        if args[:1] == ["rev-parse"]:
+            return ["c0ffee"]
+        if args[:1] == ["diff"]:
+            return diff
+        return []
+    monkeypatch.setattr(lifecycle, "_git", fake)
+
+
+def _hunk_for(path: Path, needle: str) -> str:
+    """A one-line `@@` hunk header covering the line holding `needle`."""
+    lines = path.read_text().splitlines()
+    n = next(i for i, ln in enumerate(lines, 1) if needle in ln)
+    return f"@@ -{n},1 +{n},1 @@"
+
+
+def test_base_limits_a_listed_registry_to_the_entries_the_diff_touched(
+        tmp_path, monkeypatch, capsys):
+    """The motivating run: the branch edited one row, and is graded on that row."""
+    root = _two_rows(tmp_path)
+    _stub_git(monkeypatch, [_hunk_for(root / "active.md", "library-dev")])
+    _as_root(monkeypatch, tmp_path)
+    assert lifecycle.cmd_check(_scoped(["active.md"], base="origin/main")) == 0
+    assert "~ out of scope: active.md: flywheel-rebuild" in capsys.readouterr().out
+
+
+def test_base_still_fails_on_a_row_the_diff_did_touch(tmp_path, monkeypatch):
+    root = _two_rows(tmp_path)
+    _stub_git(monkeypatch, [_hunk_for(root / "active.md", "awaiting-merge")])
+    _as_root(monkeypatch, tmp_path)
+    assert lifecycle.cmd_check(
+        _scoped(["active.md"], base="origin/main")) == 1
+
+
+def test_an_unreadable_base_falls_back_to_grading_every_entry(tmp_path,
+                                                              monkeypatch):
+    """A ref this checkout cannot resolve (a shallow clone, a typo) must not
+    quietly shrink the scope — unknown reads as "all of them"."""
+    _two_rows(tmp_path)
+    monkeypatch.setattr(lifecycle, "_git", lambda root, args: [])
+    _as_root(monkeypatch, tmp_path)
+    assert lifecycle.cmd_check(_scoped(["active.md"], base="nope")) == 1
+
+
+def test_touched_entries_reads_a_deletion_hunk(tmp_path, monkeypatch):
+    """A dropped row is a zero-length hunk anchored at the line before it."""
+    root = _two_rows(tmp_path)
+    n = next(i for i, ln in enumerate(root.joinpath("active.md").read_text()
+                                      .splitlines(), 1) if "awaiting-merge" in ln)
+    _stub_git(monkeypatch, [f"@@ -{n},2 +{n},0 @@"])
+    assert lifecycle.touched_entries(root, "active.md", "origin/main") == {
+        "flywheel-rebuild"}
+
+
+def test_no_base_means_the_touched_set_is_unknown(tmp_path):
+    root = _two_rows(tmp_path)
+    assert lifecycle.touched_entries(root, "active.md", None) is None
+
+
+def test_a_finding_about_nothing_in_particular_is_always_in_scope(tmp_path):
+    """A shallow-clone note is a fact about the CHECKOUT — no branch owns it,
+    and no branch may scope it away either."""
+    f = lifecycle.Finding("this clone cannot answer the question")
+    assert lifecycle.in_scope(tmp_path, f, ["active.md"]) is True
+
+
+def test_scope_paths_normalises_what_a_workflow_pastes(tmp_path):
+    """`git diff --name-only` output arrives repeated, space-separated,
+    `./`-prefixed or absolute."""
+    assert lifecycle.scope_paths(tmp_path, ["./active.md draft/", "active.md"]) \
+        == ["active.md", "draft"]
+    assert lifecycle.scope_paths(
+        tmp_path, [str(tmp_path / "complete" / "2026")]) == ["complete/2026"]

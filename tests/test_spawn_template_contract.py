@@ -63,7 +63,9 @@ def _fake_repo(root, files):
 
 
 MINIMAL_MIND = {
-    "README.md": "# Mind\n", "AGENTS.md": "# A\n", "CLAUDE.md": "# C\n",
+    # No CLAUDE.md: the pointers are retired (PyAutoMind#482) and the KEEP rule
+    # that still names it must tolerate its absence.
+    "README.md": "# Mind\n", "AGENTS.md": "# A\n",
     "REFERENCE.md": "# R\n", "ROUTING.md": "# Ro\n", "LICENSE": "MIT\n",
     ".gitignore": "tmp/\n",
     "AI_POLICY.md": "p\n", "CONTRIBUTING.md": "c\n",
@@ -112,8 +114,16 @@ GITHUB_FILES = {
         "        run: echo x\n"
     ),
     ".github/workflows/firewall_gate.yml": _real("firewall_gate.yml"),
+    ".github/workflows/smoke_bootstrap_propagate.yml": _real("smoke_bootstrap_propagate.yml"),
     ".github/workflows/pages_dashboard.yml": _real("pages_dashboard.yml"),
     ".github/scripts/arxiv_fetch.py": "QUERY = 'strong lensing OR lensed quasar'\n",
+    ".github/workflows/arxiv_interests.yml": (
+        "name: interests\non:\n  schedule:\n    - cron: \"30 2 * * 1-5\"\n"
+        "jobs:\n  i:\n    runs-on: ubuntu-latest\n    steps:\n"
+        "      - env:\n          PAT: ${{ secrets.PAT_PYAUTOLABS }}\n"
+        "        run: echo x\n"
+    ),
+    ".github/scripts/arxiv_interests.py": "CATEGORIES = ('astro-ph.CO',)\n",
 }
 
 DROPPED_GITHUB = [
@@ -131,10 +141,13 @@ DROPPED_GITHUB = [
     # failure mode three times over. Added 2026-08, first caught by the
     # 2026-08-24 spawn_drift run as UNMATCHED.
     ".github/workflows/firewall_gate.yml",
+    ".github/workflows/smoke_bootstrap_propagate.yml",
     # rule 9c: needs a GitHub Pages site the default token cannot create on a
     # fresh repo, and takes pages:write + id-token:write.
     ".github/workflows/pages_dashboard.yml",
     ".github/scripts/arxiv_fetch.py",
+    ".github/workflows/arxiv_interests.yml",
+    ".github/scripts/arxiv_interests.py",
 ]
 
 
@@ -254,12 +267,14 @@ def test_a_new_mind_workflow_is_a_human_decision(tmp_path):
 
 
 MINIMAL_MEMORY = {
-    "README.md": "# Mem\n", "AGENTS.md": "# A\n", "CLAUDE.md": "# C\n",
+    # No CLAUDE.md / wiki/CLAUDE.md: retired (PyAutoMind#482); the KEEP rules
+    # that still name them must tolerate their absence.
+    "README.md": "# Mem\n", "AGENTS.md": "# A\n",
     "LICENSE": "MIT\n", ".gitignore": "tmp/\n", "Makefile": "all:\n",
     "AI_POLICY.md": "p\n", "CONTRIBUTING.md": "c\n",
     "index.md": "# Index\n", "reading-queue.md": "# Reading queue\n",
     "bibliography/README.md": "# Bib\n",
-    "wiki/CLAUDE.md": "# schema\n",
+    "wiki/AGENTS.md": "# schema\n",
     ".github/workflows/validate.yml": (
         "name: validate\non:\n  push:\n    branches: [main]\n"
         "jobs:\n  v:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make validate\n"
@@ -504,3 +519,62 @@ def test_stamping_is_skipped_when_lifecycle_is_not_kept(tmp_path):
     spawn.generate_mind(mind, out)  # must not raise
 
     assert not (out / "complete" / "index.md").exists()
+
+
+def test_memory_template_keeps_canonical_wiki_schema_and_no_claude_md(tmp_path):
+    """The CLAUDE.md adapters are retired (PyAutoMind#482): spawn generates
+    none, and with none in the source none reaches the template."""
+    mem = tmp_path / 'PyAutoMemory'
+    files = dict(MINIMAL_MEMORY)
+    files['wiki/AGENTS.md'] = '# Shared wiki schema\n\nUse source citations.\n'
+    _fake_repo(mem, files)
+    out = tmp_path / 'out'
+    assert spawn.generate_memory(mem, out) == []
+    assert (out / 'wiki/AGENTS.md').read_text() == files['wiki/AGENTS.md']
+    example = (out / 'wiki/example/AGENTS.md').read_text()
+    assert 'scope' in example and '../AGENTS.md' in example
+    assert list(out.rglob('CLAUDE.md')) == []
+    assert 'CLAUDE.md' not in (out / 'README.md').read_text()
+
+
+def test_memory_template_tolerates_a_source_still_carrying_claude_md(tmp_path):
+    """Mid-retirement a source may still hold the pointer: the tolerant KEEP
+    copies it, but spawn itself never writes one into wiki/example/."""
+    mem = tmp_path / 'PyAutoMemory'
+    files = dict(MINIMAL_MEMORY)
+    files['CLAUDE.md'] = '@AGENTS.md\n'
+    files['wiki/CLAUDE.md'] = '@AGENTS.md\n'
+    _fake_repo(mem, files)
+    out = tmp_path / 'out'
+    assert spawn.generate_memory(mem, out) == []
+    assert (out / 'wiki/CLAUDE.md').read_text() == '@AGENTS.md\n'
+    assert not (out / 'wiki/example/CLAUDE.md').exists()
+    assert 'wiki/AGENTS.md' in (out / 'README.md').read_text()
+    assert 'wiki/AGENTS.md' in (out / 'index.md').read_text()
+
+
+def test_instance_hpc_policy_page_is_dropped_but_policy_is_kept():
+    """`policy/hpc_ral.md` names this instance's cluster, SSH aliases and user
+    (moved out of the root AGENTS.md, PyAutoMind#482); it must never ship in a
+    template, while the rest of policy/ stays org-agnostic KEEP."""
+    assert spawn.match_rule(Path("policy/hpc_ral.md"), spawn.MIND_RULES)[1] == "DROP"
+    assert spawn.match_rule(
+        Path("policy/end_at_deliverable.md"), spawn.MIND_RULES
+    )[1] == "KEEP"
+
+
+def test_memory_skills_are_kept_verbatim(tmp_path):
+    """Spec Memory rule 1c (PyAutoMind#484): the Memory's own agent skills are
+    generic organism skills, KEPT verbatim like the Mind's `skills/**` — never
+    UNMATCHED, never dropped."""
+    for rel in ("skills/catch_up/SKILL.md", "skills/catch_up/catch_up.md"):
+        assert spawn.match_rule(Path(rel), spawn.MEMORY_RULES)[1] == "KEEP", rel
+    mem = tmp_path / "PyAutoMemory"
+    files = dict(MINIMAL_MEMORY)
+    files["skills/catch_up/SKILL.md"] = "---\nname: catch-up\n---\nRead the log.\n"
+    files["skills/catch_up/catch_up.md"] = "# Catch up\n\nSummarise what changed.\n"
+    _fake_repo(mem, files)
+    out = tmp_path / "out"
+    assert spawn.generate_memory(mem, out) == []
+    for rel in ("skills/catch_up/SKILL.md", "skills/catch_up/catch_up.md"):
+        assert (out / rel).read_text() == files[rel], rel

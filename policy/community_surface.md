@@ -1,0 +1,201 @@
+# The community surface: users on Discussions, the development flow on issues
+
+Decided 2026-09-17 (PyAutoMind#403, from
+`draft/research/pyautobrain/community_surface_users_vs_dev_flow.md`). This
+page is the single source for *where an outsider goes* and *where the
+organism's own work lives*. The Ears (`pyauto-brain community`) read it as
+doctrine; the README "Community & Support" sections, the issue-template
+contact links and the pyautolabs.github.io front door are generated from the
+same two sentences.
+
+## The two sentences
+
+1. **Users go to one Discussions hub** —
+   <https://github.com/orgs/PyAutoLabs/discussions>, hosted on the org's
+   profile repository `PyAutoLabs/.github` (GitHub backs org Discussions
+   with one source repo; a neutral one keeps every thread URL free of a
+   library's name). Questions, help with code, help with a scientific
+   analysis, feature ideas, results to show: all of it, for every library
+   and workspace — PyAutoFit and PyAutoCTI as much as PyAutoLens — in one
+   place.
+2. **The development flow stays exactly where it is** — one GitHub issue per
+   task on the target repo, opened by the Mind's prompt lifecycle, closed by
+   its PR. Nothing about `/start_dev`, the ship skills, `/prm`, the Heart's
+   issue links or the `pending-release` labels changes.
+
+The only thing that moves is the audience. The trackers were never a problem
+for the development flow; they were a problem for a user reading them.
+
+## Why (the evidence at filing, 2026-09-15)
+
+Last 90 days across the four libraries, the lens workspace and the Mind: 447
+issues closed, **427 of them opened by the maintainer's own development flow**
+(lens 49/42, galaxy 42/39, fit 129/128, array 78/72, lens workspace 109/107,
+Mind 40/39). Every open issue on the lens, galaxy and fit libraries is the
+maintainer's. The trackers are ~95 % development flow. On 2026-09-17 the
+externally-authored *open* issues across the seven user-facing repos number
+two, both on PyAutoArray.
+
+## The five questions, answered
+
+### 1. Which surface for users — per-repo Discussions, one hub, or external?
+
+**One hub, on GitHub, at the org level, for every repo.** Rejected
+alternatives:
+
+- *Per-repo Discussions.* Fragments a community of a few dozen active users
+  across six repos and reproduces the "which repo do I post in?" question
+  that already sends PyAutoArray bugs to the PyAutoLens tracker. It also
+  repeats the bulking problem: six thin boards instead of one live one.
+- *An external forum or chat (Discourse, Zulip, Discord, the Slack).* Another
+  service to run and moderate, invisible to a search engine or to someone
+  arriving from the README, and a second login. The Slack stays what it is —
+  invitation-only, for collaborators — and is not the public surface.
+- *Hosting the hub on PyAutoLens.* It already has Discussions on (since
+  2026-07-10, one Announcements thread) and is where most users are, but
+  every thread's URL would read `PyAutoLabs/PyAutoLens/discussions/N`, which
+  tells a PyAutoFit or PyAutoCTI user they are on the lens board. Threads
+  never move when the org's source repository is switched later, so the
+  host is chosen once, before the first migration: the org profile repo
+  `PyAutoLabs/.github`, whose only job is org-wide material.
+
+Promotion (Organization settings → Discussions → source repository =
+`.github`) gives the hub the org-level URL and the "Discussions" tab on the
+org page. PyAutoLens's one announcement thread is transferred there and
+PyAutoLens's Discussions switched off; every other repo keeps Discussions
+**off**, with README and issue chooser pointing at the hub.
+
+**Categories** (simplified by the maintainer, verified live 2026-09-19):
+
+| Category | Answerable | For |
+|---|---|---|
+| Announcements | no | releases, breaking changes (exists) |
+| Help & Questions | yes | installation, usage, code, modelling and scientific analysis |
+| Ideas & Proposals | yes | feature wishes, concrete designs, API sketches and offers to implement them |
+| Bugs & Errors | yes | errors, unexpected behaviour and suspected bugs to investigate |
+| Show and tell | no | results, papers, figures |
+
+An **idea** is "it would be good if…" — no design or offer to build it yet.
+A **proposal** is a design the author has thought through and usually
+intends to write. Both belong in **Ideas & Proposals**: contributors should
+not need to understand the development workflow to pick a category. Anyone
+can open a thread. The thread argues the design; the issue, when the work
+is accepted, is still where the work is tracked.
+
+Ideas & Proposals is **answerable** on purpose. Settle a proposal by marking the
+verdict comment — "yes, open the issue" or a recorded no — as the accepted
+answer. The Ears read `answer_chosen_at`, so accepting that verdict is what
+stops the thread being chased; a closing comment alone does not settle it
+against later replies. An accepted proposal gets an issue with a link back
+to the thread, exactly as a confirmed bug does, and routes through
+`/start_dev_for_user`.
+
+### 2. Does the development flow stay on library issues?
+
+**Yes, unchanged.** Moving it (to Mind-only issues, to a private tracker, to
+PRs-only) would touch every ship skill, `/prm`, the Heart's per-repo issue
+links, the workspace `pending-release` labels and every completion record's
+`Issue:` line, for no user-visible gain once users have their own surface.
+The trackers become what they honestly are: the organism's work ledger,
+public but not addressed to users.
+
+**Where a user's bug report goes.** A report with a reproducer (a snippet or
+script, the traceback, the versions) is dev work and is welcome as an
+**issue** on the target repo — that is exactly what `/start_dev_for_user`
+picks up. Anything short of that ("this doesn't work", "how do I", "is this
+right") is a **Discussion**: errors and suspected defects go in **Bugs &
+Errors**; usage and scientific questions go in **Help & Questions**. If an
+investigation confirms a reproducible bug, the Ears open the issue with a
+link back and mark the thread answered with the issue link. Bugs & Errors
+is an entry point for investigation, not a second development tracker.
+Each user-facing repo's issue chooser (`.github/ISSUE_TEMPLATE/config.yml`)
+carries three contact links (Help & Questions, Ideas & Proposals, Bugs &
+Errors) and one bug-report template so the choice is
+made at the moment of filing; blank issues stay enabled because the
+development flow files by API and the maintainer occasionally by hand.
+
+### 3. How do the Ears scan the hub and route bugs back?
+
+`pyauto-brain community` (the scan) lists the hub's open discussions through
+the REST endpoint `repos/PyAutoLabs/.github/discussions` (read-only, and
+served to a remote session — see "Measured" below) alongside the external
+issues and PRs it already hears. A thread is **awaiting our response** when it
+has no accepted answer and its last word is not a self login, except for
+**Announcements** and **Show and tell**, which are ours to watch rather than
+threads to chase. They remain visible and explicit triage still emits their
+context surface. The board renders each thread awaiting a response as a
+`/community triage <url>` chip.
+`pyauto-brain community triage <discussion url>` emits the same
+context-sufficiency surface as for an issue, with the route: **answer in the
+thread** (drafted in the session, posted by the human), or, for a confirmed
+bug, **open the issue** with a link back and route it through
+`/start_dev_for_user`, then mark the thread answered with the issue link. The
+hub is `COMMUNITY_HUB` in the conductor (default `PyAutoLabs/.github`).
+
+### 4. What the READMEs and the front door say
+
+Every user-facing README's **Community & Support** section, and the
+pyautolabs.github.io front door, say the two sentences in this order:
+
+> Questions, help with your code or your analysis, and ideas: the
+> [PyAutoLabs Discussions](https://github.com/orgs/PyAutoLabs/discussions).
+> Bug reports with a reproducer (a snippet, the traceback, your versions):
+> an issue on the library's tracker. The Slack is for collaborators, by
+> invitation.
+
+Follow-ups filed: `draft/docs/workspaces/support_sections_point_to_discussions.md`
+(the seven READMEs and issue choosers) and
+`draft/docs/pyautolabs_github_io/front_door_community_link.md`.
+
+### 5. Historical migration is optional; route new community work correctly
+
+The hub does **not** need to be backfilled exhaustively. On 2026-09-21 the
+maintainer explicitly waived the remaining migration of old, already-shipped
+feature-request issues. PyAutoArray#499, PyAutoLens#631/#564/#542 and
+PyAutoGalaxy#419 may remain as historical issues. Do not surface them as
+unfinished maintenance work and do not recreate or copy them into Discussions.
+
+Preserve native conversions that have already happened: the live
+streaming-visibilities proposal remains
+[discussion #13](https://github.com/orgs/PyAutoLabs/discussions/13), and the
+PyAutoLens announcement remains
+[discussion #11](https://github.com/orgs/PyAutoLabs/discussions/11).
+
+The important contract is prospective: questions, ideas and proposals enter via
+the org Discussions hub; reproducible development work is tracked by an issue
+on the target repository. A confirmed bug raised in Discussions gets a linked
+development issue rather than requiring historical thread migration.
+
+PyAutoArray's `imshow_origin` report was converted to
+[discussion #14](https://github.com/orgs/PyAutoLabs/discussions/14). Its
+development tracker is now
+[PyAutoArray#565](https://github.com/PyAutoLabs/PyAutoArray/issues/565).
+If convenient in the GitHub UI, Discussion #14 can be categorized as
+**Bugs & Errors** and settled with the tracker/fix link, but this UI tidying is
+not a blocker for the community-surface rollout.
+
+## Measured, 2026-09-17, from a Claude Code remote session
+
+Recorded so nobody re-derives them:
+
+- `api.github.com/repos/<in-scope repo>/...` **is served** to a remote
+  session through the proxy with the session token (`GH_TOKEN`), including
+  `.../discussions` and `.../discussions/<n>/comments` (GET). This is the
+  path `gh api` would take; the 403s recorded in
+  `PyAutoBrain/skills/GITHUB_ACCESS.md` on 2026-08-27 do not reproduce for
+  repos attached to the session.
+- `POST .../discussions` is 404 (GitHub: the REST Discussions API is
+  read-only), `api.github.com/graphql` is refused by the proxy for every
+  query, `search/issues` is refused (org-wide search is not
+  repository-scoped), and `github.com/...` HTML is 403. **No remote
+  (proxied) session can create, convert or answer a Discussion**; there those
+  are the human's clicks. The refusal is the proxy's, not GitHub's: a local
+  CLI with an authenticated `gh` posts, answers and closes Discussions
+  through GraphQL (measured 2026-09-30 on discussion #13 —
+  `PyAutoBrain/skills/GITHUB_ACCESS.md` → "Discussions"), after the human
+  has approved the text.
+- `GET repos/<repo>` reports `has_discussions`: true on PyAutoLens only. The
+  session token has admin on every attached repo, so `PATCH` could enable
+  Discussions elsewhere — deliberately not done (decision 1).
+  `PyAutoLabs/.github` is public but cannot be attached to a session (its
+  name begins with a dot), so enabling Discussions there is a UI step.

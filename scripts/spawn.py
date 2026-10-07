@@ -57,7 +57,7 @@ EXIT_CLEAN, EXIT_DRIFT, EXIT_UNSAFE, EXIT_CRASH = 0, 1, 2, 3
 
 MIND_WORK_TYPES = (
     "feature", "bug", "refactor", "docs", "test", "release",
-    "maintenance", "research", "experiment", "triage",
+    "maintenance", "research", "human_review", "triage",
 )
 
 MIND_RULES = [
@@ -69,6 +69,9 @@ MIND_RULES = [
     ("REFERENCE.md", "KEEP"), ("AGENTS.md", "KEEP"), ("CLAUDE.md", "KEEP"),
     ("LICENSE", "KEEP"), ("ROUTING.md", "KEEP"),
     (".gitignore", "KEEP"),
+    # merge driver for the append-only autonomy_log.md, which the template
+    # carries (5b) — the attribute travels with the file it governs.
+    (".gitattributes", "KEEP"),
     ("README.md", "KEEP"),
     # Org-wide pointer docs. Generic prose, but each names the owning org and
     # links the canonical copy in that org's PyAutoScientist — so they take the
@@ -80,15 +83,27 @@ MIND_RULES = [
     ("AI_POLICY.md", "KEEP_SUB"), ("CONTRIBUTING.md", "KEEP_SUB"),
     ("repos.yaml", "SPECIAL:body_map"),
     ("active.md", "EMPTY"), ("planned.md", "EMPTY"), ("epics.md", "EMPTY"),
+    ("bundles.md", "EMPTY"),
+    # `themes.md` is the `Themes:` vocabulary the dashboard groups bundles on.
+    # EMPTY rather than KEEP: the keyword list is this org's science and
+    # tooling domains ("mge", "cti", "docs-hub"), so shipping it verbatim would
+    # stamp our subject matter into somebody else's fresh-slate Mind. An empty
+    # vocabulary simply disables the unknown-keyword warning until they write
+    # their own (see PyAutoBrain `parse_themes`).
+    ("themes.md", "EMPTY"),
     ("parked.md", "EMPTY"), ("condemned.md", "EMPTY"), ("ideas.md", "EMPTY"), ("queue.md", "EMPTY"),
     ("autonomy_log.md", "SPECIAL:autonomy_log"),
     # Prompt-file lifecycle (issue #71): draft/ (not-started) -> active/
     # (in-flight) -> complete/YYYY/MM (shipped). A fresh template ships an empty
     # draft/ skeleton; active/ + complete/ records are instance state (DROP),
     # but the complete/ archive SCHEMA is template content (KEEP, first-match).
+    # `batches/` is the same shape one step further on: a batch record is what
+    # one dispatched shift did, which is instance state, while the schema that
+    # says how to write one is template content. Same split, same first-match
+    # ordering, same reason.
     ("draft/*", "SKELETON"),
-    ("complete/AGENTS.md", "KEEP"),
-    ("active/*", "DROP"), ("complete/*", "DROP"),
+    ("complete/AGENTS.md", "KEEP"), ("batches/AGENTS.md", "KEEP"),
+    ("active/*", "DROP"), ("complete/*", "DROP"), ("batches/*", "DROP"),
     ("docs/*", "DROP"),
     # `dashboard.md` is EMPTY rather than DROP: README.md ships verbatim and
     # links it, so dropping it would hand every spawned org a broken
@@ -101,6 +116,16 @@ MIND_RULES = [
     # publisher — pages_dashboard.yml — is dropped by rule 9c, so a fresh org
     # has nothing that reads it until it regenerates the pair itself.
     ("dashboard.html", "DROP"),
+    # `state.json` is the organ-cockpit feed (PyAutoBrain board/_state.py v1),
+    # written by the same `--apply dashboard` run and published by the same
+    # dropped pages_dashboard.yml. DROP for the same reason as dashboard.html:
+    # nothing shipped reads it until a fresh org regenerates the dashboard.
+    ("state.json", "DROP"),
+    # `policy/hpc_ral.md` is the one instance page under policy/ (first match
+    # wins, so it precedes policy/*): this organism's cluster, SSH aliases, user
+    # and partitions, moved out of the unversioned root AGENTS.md
+    # (PyAutoMind#482). The rest of policy/ is org-agnostic safety text.
+    ("policy/hpc_ral.md", "DROP"),
     ("skills/*", "KEEP"), ("policy/*", "KEEP"),
     # .github is decided PER FILE by the spec's fresh-repo invariant (rule 9):
     # a shipped workflow must succeed on a freshly-spawned repo with no secrets
@@ -131,17 +156,41 @@ MIND_RULES = [
     (".github/workflows/morning_status.yml", "DROP"),
     (".github/workflows/morning_health.yml", "DROP"),
     (".github/workflows/arxiv_papers.yml", "DROP"),
+    # rule 9c, same as its sibling above: scheduled, needs the papers
+    # webhook-less cross-repo PAT, and pushes to another org repo.
+    (".github/workflows/arxiv_interests.yml", "DROP"),
     # 9c also: the tenant-firewall gate checks out three sibling organ repos by
     # name (PyAutoBrain/PyAutoHeart/PyAutoHands). A fresh org has none of them,
     # and owner substitution only turns those into YOURORG/... placeholders —
     # the same failure mode as dashboard_refresh.yml.
     (".github/workflows/firewall_gate.yml", "DROP"),
+    # 9c also: the SessionStart-hook propagator. It clones every sibling repo
+    # in the manifest with secrets.PAT_PYAUTOLABS and pushes bot commits into
+    # them by name — firewall_gate.yml's org-coupled shape, multiplied by
+    # thirty, plus rule 9's no-configured-secret condition. A fresh org has no
+    # siblings to propagate into and no such secret to do it with.
+    (".github/workflows/session_hook_propagate.yml", "DROP"),
+    # Same rule 9c: sibling pushes require an org token and an adopted manifest.
+    (".github/workflows/smoke_bootstrap_propagate.yml", "DROP"),
     # 9c also: the Pages publisher. It needs a GitHub Pages site the default
     # token cannot create on a fresh repo (the Hands lesson, already recorded
     # for Memory's knowledge_board.yml) and takes pages:write + id-token:write,
     # so it is unrunnable on arrival. scripts/ and the renderer still travel;
     # an adopter re-adds the publisher deliberately.
     (".github/workflows/pages_dashboard.yml", "DROP"),
+    # 9c also: the branch sweep checks out PyAutoLabs/PyAutoBrain for its logic
+    # (dashboard_refresh.yml's failure mode again — YOURORG/PyAutoBrain does not
+    # exist), and carries a weekly cron, which rule 9's no-unattended-trigger
+    # condition rejects on its own. Worth re-adding deliberately once an
+    # adopter has a Brain; not worth inheriting a scheduled job that fails on
+    # checkout every Sunday.
+    (".github/workflows/branch_sweep.yml", "DROP"),
+    # 9c also: the ledger auto-merge. It MERGES TO MAIN with the workflow
+    # token and checks out PyAutoLabs/PyAutoBrain for the dashboard render
+    # (dashboard_refresh.yml's failure mode again). A fresh org should inherit
+    # neither unasked: an adopter re-adds it once they have a Brain and have
+    # decided for themselves which of their paths are ledger.
+    (".github/workflows/mind_ledger_merge.yml", "DROP"),
     (".github/scripts/*", "DROP"),
     # NO `.github/*` catch-all, deliberately. A catch-all is fail-OPEN: a new
     # Mind workflow would ride it into the template carrying whatever schedule
@@ -158,12 +207,21 @@ MIND_RULES = [
 
 MEMORY_RULES = [
     ("bibliography/README.md", "KEEP"),
+    # Rule 1 exception (first match wins, so it precedes scripts/*): the
+    # wikilink ratchet baseline lists THIS instance's known-broken links, so it
+    # is instance content (it names sub-wiki pages). read_baseline() treats an
+    # absent file as an empty baseline, so a fresh repo starts at zero.
+    ("scripts/wikilink_baseline.txt", "DROP"),
     ("scripts/*", "KEEP"), ("tests/*", "KEEP"),
     ("Makefile", "KEEP"), ("LICENSE", "KEEP"),
     ("AGENTS.md", "KEEP"), ("CLAUDE.md", "KEEP"), (".gitignore", "KEEP"),
     # Same org-wide pointer docs as MIND_RULES — owner substitution; under
     # .github/ since the 2026-08 root declutter (all five organs match).
     ("AI_POLICY.md", "KEEP_SUB"), ("CONTRIBUTING.md", "KEEP_SUB"),
+    # Spec Memory rule 1c: the Memory's own agent skills are generic organism
+    # skills — the same class as MIND_RULES' `skills/*` KEEP (spec Mind rule 8).
+    # The canary scan still grades every kept file (PyAutoMind#484).
+    ("skills/*", "KEEP"),
     ("bibliography/*", "EMPTY"),
     # Same fail-closed discipline as MIND_RULES (spec rule 9d). validate.yml is
     # self-contained — no schedule, no secrets, no sibling repos — so it clears
@@ -184,9 +242,25 @@ MEMORY_RULES = [
     # DROP: the claude-action filing workflow needs the instance's Claude OAuth
     # secret, labels and reading queue — instance machinery like the two above.
     (".github/workflows/queue_filing.yml", "DROP"),
+    # DROP: the arXiv-ref backfill is generic (no secrets, no sibling repos) but
+    # runs on a schedule and pushes to main, which breaks the fresh-repo
+    # invariant exactly as the board publisher does. scripts/arxiv_refs.py and
+    # scripts/backfill_arxiv_refs.py SHIP via scripts/*, so an adopter with a
+    # populated reading queue re-adds the workflow deliberately.
+    (".github/workflows/arxiv_refs.yml", "DROP"),
+    # DROP: the queue sweep runs on a cron and dispatches workflows with
+    # actions: write — instance machinery like its queue_actions/queue_filing
+    # siblings, and a scheduled job breaks the fresh-repo invariant.
+    (".github/workflows/queue_sweep.yml", "DROP"),
+    # Installed hook copies (propagated by the PyAutoBrain installer / session
+    # hook propagation), not source content — same rule as the Mind table.
+    (".claude/*", "DROP"), (".codex/*", "DROP"),
     # The shared wiki schema is template content; the sub-wikis are instance
     # content (the generator stamps an empty wiki/example/ instead).
-    ("wiki/CLAUDE.md", "KEEP"),
+    # The CLAUDE.md KEEPs (here and above) are tolerant leftovers: the pointer
+    # files are retired (PyAutoMind#482), so they match nothing once a source
+    # repo has dropped its copy, and spawn never generates one.
+    ("wiki/AGENTS.md", "KEEP"), ("wiki/CLAUDE.md", "KEEP"),
     ("wiki/*", "DROP"),
     # Instance branding:
     ("logo.png", "DROP"),
@@ -196,6 +270,9 @@ MEMORY_RULES = [
     # content, the instance's overnight suggestions are not. A fresh repo gets
     # the header and no papers; PyAutoMemory#57.
     ("arxiv-inbox.md", "EMPTY"),
+    # EMPTY for the same reason: the day-batch format is template content, the
+    # instance's backlog of recommendations is not.
+    ("arxiv-interests.md", "EMPTY"),
     ("README.md", "SPECIAL:memory_readme"),
 ]
 
@@ -225,6 +302,8 @@ EMPTY_TITLES = {
     "dashboard.md": "# PyAutoMind Dashboard",
     "active.md": "# Active Tasks",
     "epics.md": "# Epics",
+    "bundles.md": "# Bundles",
+    "themes.md": "# Themes",
     "planned.md": "# Planned",
     "parked.md": "# Parked tasks",
     "condemned.md": "# Condemned material",
@@ -232,6 +311,7 @@ EMPTY_TITLES = {
     "queue.md": "# Queue",
     "reading-queue.md": "# Reading queue",
     "arxiv-inbox.md": "# arXiv inbox",
+    "arxiv-interests.md": "# arXiv interests",
 }
 
 # Generated header comments for EMPTY files matched by a glob rather than by
@@ -265,7 +345,7 @@ or lowering the per-work-type autonomy caps in `PyAutoBrain/AUTONOMY.md` (the
 autonomy contract). One row per run, appended at PR-open or on parking.
 
 Outcome ∈ `merged-unchanged` / `amended` / `rejected` / `parked` /
-`corrective`.
+`corrective` / `red-override`.
 
 | date | task | effective level | gates (tests/smoke/review/heart) | outcome |
 |------|------|-----------------|----------------------------------|---------|
@@ -332,7 +412,7 @@ MEMORY_INDEX_TEMPLATE = """\
 # PyAutoMemory — index
 
 Top-level navigation across the sub-wikis. Every sub-wiki is self-contained
-and follows the schema defined in `wiki/CLAUDE.md`.
+and follows the schema defined in `wiki/AGENTS.md`.
 
 | Wiki | Covers |
 |------|--------|
@@ -353,27 +433,27 @@ concepts, and the citation metadata to verify them. Start at
 | Piece | What it is |
 |-------|------------|
 | `wiki/example/` | An empty sub-wiki demonstrating the schema — copy it per domain. |
-| `wiki/CLAUDE.md` | The shared schema every sub-wiki inherits. |
+| `wiki/AGENTS.md` | The canonical shared schema every sub-wiki inherits. |
 | `bibliography/` | Canonical BibTeX metadata every wiki claim cites against. |
 | `reading-queue.md` | What is waiting to be read and filed. |
 
 New knowledge updates the metadata and the claim support together, then
 passes `make validate`. The wiki schema is defined in
-`wiki/CLAUDE.md` and inherited by every sub-wiki. How agents should
+`wiki/AGENTS.md` and inherited by every sub-wiki. How agents should
 read this repo: [AGENTS.md](AGENTS.md).
 
 This repo was generated by `spawn` from the live PyAutoScientist organism —
 see <https://pyautoscientist.readthedocs.io>.
 """
 
-EXAMPLE_WIKI_CLAUDE = """\
+EXAMPLE_WIKI_AGENTS = """\
 # example wiki — scope
 
 An empty sub-wiki demonstrating the layout. Copy `wiki/example/` to
 `wiki/<your-domain>/` to start a real sub-wiki. All schema rules — page
 types, naming, `[[wiki-links]]`, frontmatter, page structures, status
-flags — are defined once in [`../CLAUDE.md`](../CLAUDE.md) and inherited;
-a sub-wiki's own `CLAUDE.md` (this file) records only its scope: what the
+flags — are defined once in [`../AGENTS.md`](../AGENTS.md) and inherited;
+a sub-wiki's own `AGENTS.md` (this file) records only its scope: what the
 domain covers, and which adjacent topics link out to sibling wikis.
 """
 
@@ -649,7 +729,7 @@ def generate_memory(memory_root, out_dir):
             dest.write_text(TEMPLATE_README_BANNER + MEMORY_README_TEMPLATE)
     wiki = out_dir / "wiki" / "example"
     wiki.mkdir(parents=True, exist_ok=True)
-    (wiki / "CLAUDE.md").write_text(EXAMPLE_WIKI_CLAUDE)
+    (wiki / "AGENTS.md").write_text(EXAMPLE_WIKI_AGENTS)
     (wiki / "index.md").write_text(EXAMPLE_WIKI_INDEX)
     (wiki / "sources").mkdir(exist_ok=True)
     (wiki / "sources" / "EXAMPLE_stub.md").write_text(EXAMPLE_WIKI_STUB)
@@ -691,9 +771,18 @@ def canary_scan(out_dir):
     return hits
 
 
+def bootstrap_checkout(root, name):
+    """Locate seed sources in flat and grouped workspaces."""
+    flat = root / name
+    grouped = root / "organs" / name
+    if flat.is_dir() and grouped.is_dir() and flat.resolve() != grouped.resolve():
+        raise ValueError(f"{name}: ambiguous flat and grouped checkouts")
+    return grouped if grouped.is_dir() else flat
+
+
 def generate_all(root, out_root):
-    mind_root = root / "PyAutoMind"
-    memory_root = root / "PyAutoMemory"
+    mind_root = bootstrap_checkout(root, "PyAutoMind")
+    memory_root = bootstrap_checkout(root, "PyAutoMemory")
     results = {}
     for name, gen, src in (
         ("PyAutoMind-template", generate_mind, mind_root),
@@ -733,7 +822,7 @@ def diff_trees(a, b):
 def stamp_family(root, family_dir):
     """Stamp the family's mechanical layers (spec: workflows deferred to the
     reusable-smoke work; the workspace pin stamps the family's own version)."""
-    license_text = (root / "PyAutoMind" / "LICENSE").read_text()
+    license_text = (bootstrap_checkout(root, "PyAutoMind") / "LICENSE").read_text()
     stamped = []
     for repo in ("PyAutoProject", "autoproject_workspace", "autoproject_workspace_test"):
         rdir = family_dir / repo
@@ -810,6 +899,26 @@ def report(results):
     return failed
 
 
+def workspace_root(mind_root):
+    """The workspace root to stamp the templates from.
+
+    Resolved in ONE place for the whole of scripts/ — by the body map's own
+    tool, which adopts PyAutoBrain's shared resolver (an explicit PYAUTO_ROOT,
+    then the nearest ancestor carrying a `.pyauto-root` marker, then the parent
+    of a checkout). Imported here rather than at module scope, and tolerantly:
+    this generator has to keep working as a lone copy of itself — the drift job
+    copies it out, and `test_spawn_template_contract` runs it from a temp
+    directory — and where `repos_sync` is not beside it, the parent of this
+    checkout is exactly the answer this script gave before the resolver
+    existed.
+    """
+    try:
+        from repos_sync import workspace_root as resolve
+    except ImportError:
+        return mind_root.parent.parent if mind_root.parent.name == "organs" else mind_root.parent
+    return resolve(mind_root)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write", metavar="DIR")
@@ -819,7 +928,8 @@ def main():
     args = parser.parse_args()
 
     mind_root = Path(__file__).resolve().parents[1]
-    root = args.root or mind_root.parent
+    # `--root` still wins; only the default changed (see workspace_root).
+    root = args.root or workspace_root(mind_root)
 
     if args.stamp_family:
         stamped = stamp_family(root, Path(args.stamp_family))

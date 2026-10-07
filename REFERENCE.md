@@ -5,6 +5,16 @@ Moved verbatim from `README.md` on 2026-07-10 — agent docs that point at
 README sections ("Prompt taxonomy", "Prompt file format", the `active.md` /
 completion-record schemas) resolve here, one link from the README.
 
+The read-only context check is `python3 scripts/token_load.py report --root
+<workspace-root>`; `check` applies the same measurement to the configured
+budgets. It supports grouped main and flat bundle roots, and reports mandatory
+AGENTS and core skill files separately from conditional references. In the
+September 2026 context pass, Mind `AGENTS.md` fell from 12,507 bytes / 214 lines
+to about 5,100 bytes / 94 lines. The broader
+`draft/maintenance/organs/reduce_session_token_load.md` remains draft; this
+measurement does not imply its Cortex, Memory, or completion-record goals are
+done.
+
 ---
 
 ## What a prompt looks like
@@ -135,7 +145,9 @@ over the registry without starting work:
 PyAutoMind/
 ├── README.md                ← short front page
 ├── dashboard.md             ← GENERATED task page (picks / in flight / parked / planned / backlog)
-│                              `pyauto-brain intake --apply dashboard`; CI self-heals it on main
+│                              `pyauto-brain intake --apply dashboard`; CI self-heals the RENDER on
+│                              main — never a shipped prompt nobody retired (that is /prm's close-out
+│                              per task, `intake reconcile` across the backlog)
 ├── REFERENCE.md             ← this file (schemas + conventions)
 ├── .gitignore
 │
@@ -144,7 +156,6 @@ PyAutoMind/
 ├── parked.md                ← started/scoped but not in flight (stashes, orphan worktrees, deferred)
 ├── planned.md               ← issued tasks blocked from starting (created on demand)
 
-├── queue.md                 ← processing queue for /register_and_iterate
 │
 │   PROMPT-FILE LIFECYCLE (issue #71): draft/ → active/ → complete/YYYY/MM/.
 │   Drafts are organised by WORK TYPE (first folder), then TARGET (second).
@@ -155,7 +166,7 @@ PyAutoMind/
 │   ├── bug/                 ← incorrect behaviour, crashes, regressions
 │   ├── refactor/            ← internal restructuring, no intended behaviour change
 │   ├── docs/                ← documentation, tutorials, notebooks, examples
-│   ├── test/  release/  maintenance/  research/  experiment/
+│   ├── test/  release/  maintenance/  research/
 │   └── triage/              ← classification still unclear; needs manual review
 │
 ├── active/                  ← ISSUED, in flight (moved here by /start_dev)
@@ -183,14 +194,15 @@ PyAutoMind/
 `OWNERSHIP.md`). The development-workflow skills were re-homed to the organs that
 own them — **PyAutoBrain** (`start_dev`, `start_dev_for_user`, `plan_branches`,
 `start_library`, `start_workspace`, `ship_library`, `ship_workspace`,
-`register_and_iterate`, `health` [the single health door, with `check` sweep,
+`health` [the single health door, with `check` sweep,
 `status` dashboard, and `full` release-run legs]), **PyAutoHeart**
 (`worktree_status`, and the health-leg procedures `health_sweep/`,
 `pyauto-status/`, and `pyauto-status-full/` that `/health` drives), and
 **autolens_profiling** (`profile_likelihood`). The
 `handoff` skill was retired (PyAutoBrain runs uniformly across execution
 environments — see `OWNERSHIP.md`). General PyAuto tooling (release prep,
-dependency audits, smoke tests, lint sweeps) lives in `admin_jammy/skills/`.
+dependency audits, smoke tests, lint sweeps) lives in the organ that owns it —
+`PyAutoBrain/skills/`, `PyAutoHeart/skills/`, `PyAutoHands/`.
 
 `scripts/prompt_sync.sh` is sourced by skills that mutate registry files
 (`active.md`, `planned.md`, etc.) to commit and push back to origin. It
@@ -226,7 +238,20 @@ Prompts start at `draft/<work-type>/<target>/<name>.md` (and advance
 | `release/` | packaging, versions, deployment, release readiness | release engineer |
 | `maintenance/` | dependency updates, hygiene, cleanup, small tech debt | hygiene agent |
 | `research/` | exploratory scientific / algorithmic investigation | research analyst |
-| `experiment/` | prototypes, spikes, proof-of-concept work | prototype agent |
+| `human_review/` | work that already shipped and a human wants to sign off | (none — a person reviews) |
+
+`human_review/` is the one work-type nothing infers. Every other folder answers
+*what is this prompt about?*; this one records a human's judgement that a
+**completed** task needs their eyes before it counts as done. File one by
+declaring `Type: human review` (`human-review`/`human_review` read the same) —
+`/intake` will never choose it for you, and no task acquires it by default.
+Review is opt-in, not a lifecycle stage, so an empty section means nothing was
+flagged, not that nothing shipped. It renders as its own **Human review** section
+on `dashboard.md`, directly under *In flight*, and is not counted as backlog: a
+review is not work to pick up, it is work waiting on you. Its 📋 hands out a
+read-and-report prompt rather than a `/start_dev`. Sign one off by retiring the
+prompt the usual way (`lifecycle.py record …`); don't sign it off and the
+follow-up is an ordinary `/intake`.
 
 `triage/` holds prompts whose classification is still unclear — file there with a
 short note and re-home once the work type is obvious. The full mapping (and the
@@ -241,7 +266,7 @@ bug/autoarray/mask_edge_case.md
 refactor/autofit/result_object_cleanup.md
 docs/workspaces/pixelization_tutorial.md
 research/autofit/sbi_design.md
-experiment/autoarray/jax_sparse_mapping.md
+human_review/autolens/scaling_relation_fit_quality.md
 ```
 
 ### Not work-types
@@ -296,13 +321,22 @@ Free-form markdown. Strong conventions:
   Repos:
   - PyAutoLens
   - autolens_workspace
+  Themes:                   # optional; vocabulary in themes.md, primary first
+  - mge
+  - jax-gradient
   Difficulty: medium        # small | medium | large | too-large
   Autonomy: supervised      # safe | supervised | human-required
   Priority: normal          # low | normal | high
   Status: draft
+  Consequence: glance       # notify | glance | judge — how much review it needs
+  Witness: ids bit-identical, 62 -> 9.7 ms   # what makes it checkable in minutes
+  Review-minutes: 3         # a seed, not a measurement
+  Unattended: ready         # ready | needs-slicing | never
   Filed: 2026-07-09         # optional; the day the prompt was written
   Issued: 2026-08-19        # optional; set when the prompt advances to active/
   Blocked-by: PyAutoFit#1436          # optional; see "Declaring a gate" below
+  Epic: cluster-strong-lensing        # optional; an entry in epics.md
+  Bundle: euclid-pipeline-tidy        # optional; an entry in bundles.md
   ```
 
   When present, `Type:` should match the work-type folder. The goal is light
@@ -338,6 +372,66 @@ Free-form markdown. Strong conventions:
   had closed without anyone noticing — including one whose exit condition was met
   the same day it was written.
 
+  **A Cortex-spawned dev follow-up gets its issue at filing — `Issue:`.** Normally a
+  prompt has no GitHub issue until `/start_dev` opens one and moves it `draft/ →
+  active/`. There is one exception, adopted 2026-09-01 (Cortex schema decision 55).
+  A **PyAutoCortex** phase declares what it waits on in a `Gates:` line that may
+  hold **GitHub refs only** — it cannot cite a Mind prompt path. So when a Cortex
+  science phase is gated on Mind dev work that has not started, that dev prompt is
+  filed as a draft **with its issue opened at the same moment**, so the Cortex phase
+  has a ref to name. The prompt stays in `draft/` — an open issue here means
+  "there is a ref", not "the work is in flight" — and carries the URL in its body:
+
+  ```markdown
+  Issue: https://github.com/PyAutoLabs/<repo>/issues/<n> (opened <YYYY-MM-DD> as a Cortex gate ref; reuse in start_dev — never open a second)
+  ```
+
+  `create_issue` and `/start_dev` **reuse that issue** when the prompt is finally
+  picked up — they must never open a second one. Two issues for one prompt is the
+  failure this rule exists to prevent: the Cortex phase's gate would then be watching
+  the wrong one, and would never clear.
+
+  This applies *only* to Cortex-spawned gate refs. An ordinary draft still gets its
+  issue at `/start_dev` time and nowhere earlier — filing issues ahead of the work in
+  general is the bulk-issue-queue anti-pattern, which stays forbidden.
+
+  **Declaring group membership — `Epic:` / `Bundle:`.** Both optional, both
+  naming a slug in the matching registry file, and the two mean opposite things
+  about ORDER. `Epic: <slug>` (`epics.md`, plus an optional `Phase: <n>`) says
+  this prompt is one phase of an ordered programme: the dashboard pulls it out
+  of every pick list and shows it only under its epic, worked in phase order.
+  `Bundle: <slug>` (`bundles.md`) says the opposite — this prompt is
+  INDEPENDENT, and a human has pinned it to a set worth running in one
+  orchestrated session. A bundle member keeps its normal place on the
+  dashboard and gains a Bundles card; it leaves only the *auto*-bundle pool,
+  since it is already spoken for. A slug naming no registry entry still
+  groups, loudly (⚠️ on the page), so a typo is visible rather than silent.
+
+  **Declaring what the work is ABOUT — `Themes:`.** Optional, and the same
+  list shape as `Repos:` — a bare `Themes:` line, then one `- keyword` bullet
+  each. `Target:` says where the code lives; `Themes:` says what the work is
+  about, which is usually the more useful grouping and is routinely cross-repo:
+
+  ```markdown
+  Themes:
+  - mge
+  - jax-gradient
+  ```
+
+  The **first** keyword is the primary theme and is what the dashboard's
+  auto-bundler groups on, so a card reads "three things about MGE" rather than
+  "three things that live in autoarray"; the remaining keywords are affinity,
+  deciding which prompts pack together inside that group. One to three keywords
+  is the intended shape, primary first. A prompt with no `Themes:` still
+  bundles — the bundler falls back to `Target:` — so nothing waits on a theme.
+
+  The vocabulary is [`themes.md`](themes.md), a plain markdown list a human
+  edits directly (PyAutoBrain reads that file rather than holding its own
+  copy). A keyword that is not in it still groups, loudly: ⚠️ on the bundle
+  card and a count in the dashboard's Hygiene section, so the list never rots
+  into free-text tags. The **Intake (Conception) Agent** assigns `Themes:` when
+  it formalises a prompt.
+
   The optional `Difficulty:` / `Autonomy:` / `Priority:` keys let both people and
   PyAutoBrain see, at a glance, how hard a task is, whether an agent can safely
   take it on, and how urgent it is. What each `Autonomy:` level *does* at every
@@ -349,6 +443,84 @@ Free-form markdown. Strong conventions:
   up front is the one the Feature Agent later acts on. Still a convention, not a
   schema: all keys remain optional and there is **no YAML frontmatter**.
 
+### The queue and the batch records
+
+Two ledger surfaces the batch workflow adds. Both auto-merge
+(`scripts/ledger_merge.py`): an unattended system that cannot record its own
+history unattended will not record it.
+
+- **[`queue.md`](queue.md)** — the human's ordered wishlist, and the only file
+  they maintain by hand between slots. **Order is priority**; there is no
+  `priority:` field, because moving an entry up *is* the act of prioritising it.
+  An entry is a `prompt` (one named file) or `retired` (kept for the history of
+  what was wanted and why it left). A batch is never composed here —
+  `pyauto-brain batch plan` proposes one against a review-minute budget, and the
+  human approves or edits it in the slot.
+- **`batches/<YYYY-MM-DD>-<am|pm>.md`** — one record per dispatched batch,
+  written at dispatch and appended at collection. Schema and the three fields
+  that are easy to get wrong are in [`batches/AGENTS.md`](batches/AGENTS.md).
+
+### The review-cost model
+
+`Difficulty:` measures blast radius — how far a change reaches. It cannot answer
+the question a batch has to be planned against, which is what the task will cost
+**the human** once it lands. Four keys answer that, all derived by the sizing
+faculty at conception and all overridable by declaring them:
+
+- **`Consequence:`** `notify` | `glance` | `judge` — how much review the work
+  needs. `notify` is work nobody outside this workshop consumes (docs,
+  notebooks, profiling scripts, organ-repo tooling, test-only, a refactor with a
+  byte-equality witness). `glance` is a witnessed change to a consumed repo: you
+  read the witness, not the diff. `judge` is a PI's call — a public API, a
+  default, an error contract, a science-policy question, an external reporter's
+  request.
+
+  **The declared tier also decides who merges** (2026-10-02,
+  `PyAutoBrain/AUTONOMY.md` "Merge authority follows Consequence"). `notify`:
+  the shipping session waits for CI inside its turn, merges on green and runs
+  the `/prm` close-out itself. `glance`: the same, only when the `Witness:`
+  check passed; the human reads a post-merge summary, and each auto-merge
+  appends a row to the Shadow window in `autonomy_log.md` (confirmed at 20
+  clean rows; any revert demotes `glance` back to a human `/prm`). `judge`, or
+  no declared header: the human runs `/prm`, as before. Only a tier **written
+  in the prompt** carries merge authority — a tier the sizing faculty would
+  infer for a header-less prompt never does. Never auto-merged at any tier: a
+  `decision-taken` PR, a Heart RED-override or corrective-PR-exception ship,
+  red/pending/conflicting CI, or a SKIPPED test leg.
+- **`Witness:`** free text: the machine-checkable claim that will make this
+  reviewable in minutes rather than by reading the diff. Look at what the fast
+  completion records carry — "ids bit-identical, 62 → 9.7 ms", "31-rule
+  byte-equality", "0.068″ parity vs the published model". The slow ones carry
+  prose.
+
+  **No `Witness:` means `Consequence: judge`,** however small the task looks.
+  That default is the point: choosing a cheap tier means committing, at
+  conception, to producing evidence — which is what actually makes work
+  reviewable quickly. It is also the one key nothing derives or backfills. An
+  invented witness is plausible prose with nothing behind it, which is worse
+  than none, because the value of the field is that its absence is informative.
+  So `intake formalise` will never write one, and neither should you unless you
+  mean it.
+- **`Review-minutes:`** an integer **seed**, not a measurement — tier-driven,
+  with one nudge for size. The honest numbers come from what the human actually
+  spent, recorded per batch. Never cite a value here as evidence about how long
+  something took.
+- **`Unattended:`** `ready` | `needs-slicing` | `never` — can it finish without
+  a human. Deliberately not `Difficulty:` renamed: `needs-slicing` keys off the
+  **compaction rule** — a task that would need context compaction to finish is
+  too big to run unattended — so a single-repo `large` task is still `ready`
+  while a `large` one across four repos is not.
+
+Measured over the 153 backlog prompts the day this shipped: **151 grade `judge`,
+because three carry a witness.** Given one, the same backlog grades 33 `notify` /
+104 `glance` / 16 `judge`. The whole distance between "everything costs a PI's
+hour" and "a fifth of it costs nothing" is whether prompts say what will make
+them checkable.
+
+Read `pyauto-brain sizing <prompt>` for any prompt's grades, and
+`PyAutoBrain/agents/faculties/sizing/AGENTS.md` for the rules and their known
+limits.
+
 ### `active.md` schema
 
 Each task is an H2 section:
@@ -357,8 +529,13 @@ Each task is an H2 section:
 ## <task-name-kebab-case>
 - issue: https://github.com/<owner>/<repo>/issues/<n>
 - issued: YYYY-MM-DD                              # the day the task was issued
-- session: claude --resume <session-id>           # optional
+- session: <actual harness; known session ID or URL, otherwise unavailable>  # optional
 - status: <library-dev | workspace-dev | ready-to-ship | awaiting-input | …>
+- library-pr: <url>               # optional until the PR exists; repeatable —
+- library-pr: <url>               # one line per PR, or one line of `<url>, <url>`
+- workspace-pr: <url>             # same shape, for the workspace half
+- pending-release: <lib>@<pr-url> # optional; a merged PUBLISHED-library PR not yet on PyPI
+- release-gate: <lib>             # optional; this task waits on <lib>'s release
 - location: <cli-in-progress | ready-for-mobile | …>   # optional, used by /handoff
 - question: <issue-comment-url>   # optional; set when status is awaiting-input
                                   # (checkpoint-and-continue — PyAutoBrain/AUTONOMY.md)
@@ -377,6 +554,119 @@ Each task is an H2 section:
 - summary: |
     Free-form summary of progress and next steps.
 ```
+
+The optional `session:` value is free text describing the actual harness and
+session. Include a real resume command only when the harness and session ID are
+known, for example `codex resume <id>` or `claude --resume <id>`. Otherwise record
+the known harness and mark the session ID unavailable; omit the field when even
+the harness is unknown. Never infer a provider or invent an ID. Existing values
+and historical session records remain valid and are preserved verbatim.
+
+
+#### The PR keys (`library-pr:` / `workspace-pr:`)
+
+`ship_library` and `ship_workspace` write them; `/prm` reads them to find the
+PRs it must merge; the dashboard links them. They were doing all three before
+they were written down here, which is why nothing validated them and the
+dashboard could only render the free-text `status:`.
+
+- **Repeatable.** A task may ship several PRs of one kind (phase 2 of the
+  `mind-post-cortex` epic opened three library PRs). Repeat the key on its own
+  line, one URL each. The older single-line form — `- library-pr: <url>, <url>`
+  — stays valid and is read the same way; nothing needs rewriting.
+- **`library-pr:` means "a PR against a library or organ repo"** and
+  `workspace-pr:` "a PR against a workspace, HowTo or assistant repo". The
+  distinction is the merge order `/prm` enforces (library first), not the
+  diff's contents.
+- **The rule `lifecycle.py check` enforces:** a row whose `status:` says
+  `awaiting-merge`, `PR open` or `shipped` must carry at least one `*-pr:`.
+  A row that declares its PRs are open, and then does not say where they are,
+  is a task `/prm` cannot close and a human cannot find.
+
+**This one is drift, not a warning** — `check` exits 1 on it. A row that says
+its PRs are open and then does not say where they are contradicts itself, which
+is the class of thing this check exists to catch; there is nothing for a human
+to weigh. The live ledger passed the day it shipped, so the first failure can
+only be a new row.
+
+The escalation ladder for the *other* new check is the opposite way round: an
+uncleared `pending-release:` is reported and `check` still exits 0 (below), and
+it stays that way. It is not a contradiction — the key's whole meaning is "not
+released yet" — so it must never become a gate on the Mind's CI. If it ever
+looks like it should escalate, the thing to fix is the release, not the check.
+
+#### The pending-release chain (`pending-release:` / `release-gate:`)
+
+A merged library PR is not a released library. Between the merge and the PyPI
+publish, workspace work that depends on the new API is blocked, and until this
+shipped the only machine view of that state was the Brain board's live `gh`
+search over the `pending-release` label.
+
+The division of labour is deliberate and this is the whole of it:
+
+| Who | Holds |
+|-----|-------|
+| **GitHub** | the `pending-release` label on the merged library PR — the source of truth for "merged, not yet published" |
+| **PyAutoHands** | the release that publishes it |
+| **Mind** | the *link* (`pending-release: <lib>@<pr-url>`) and the *gate* (`release-gate: <lib>`) — nothing else |
+
+- **Only the published set carries the chain.** `PUBLISHED_REPOS` in
+  `scripts/lifecycle.py` (defined once; it mirrors the `release` job matrix
+  of `PyAutoHands/.github/workflows/release.yml`, the job that uploads to PyPI
+  and pushes the bare `<version>` tag) is PyAutoNerves, PyAutoFit,
+  PyAutoArray, PyAutoGalaxy and PyAutoLens. An organ, a workspace, a
+  `_test`/`_developer`/HowTo/assistant/visualization/profiling repo is never
+  published, so no release could clear a link to it — such a PR gets neither
+  the label nor the line.
+- `ship_library` writes `pending-release: <lib>@<pr-url>` on the task's
+  `active.md` row when it opens a PR carrying the `pending-release` label —
+  i.e. only for a published-set repo. `<lib>` is the library repo's name
+  (`PyAutoArray`), the URL its PR; one link per line, nothing else on it.
+  There is no placeholder: a task with no published-library PR simply has no
+  `pending-release:` line (never `pending-release: none ...`).
+- `ship_workspace` writes `release-gate: <lib>` on a workspace task that is
+  blocked behind that library's release. One line per library.
+- `/prm` close-out carries any uncleared, well-formed `pending-release:` from
+  the `active.md` row into the completion record, so the obligation outlives
+  the row.
+- **`/review_release` step 6, the "Live run" branch, clears it** — that is the
+  one step in the organism that establishes a release actually published. It
+  runs one verb:
+
+  ```bash
+  python3 scripts/lifecycle.py clear-released --version <v>            # dry run
+  python3 scripts/lifecycle.py clear-released --version <v> --apply --remove-labels
+  ```
+
+  which asks GitHub which links the release tag *contains* (the PR's merge
+  commit is an ancestor of tag `<v>` — containment, never merge dates),
+  deletes those `pending-release:` lines from `active.md` and `complete/`,
+  drops a record's `release-gate: <lib>` once none of that library's links
+  remain, regenerates the dashboard, and — with `--remove-labels` — drops the
+  `pending-release` label from every released published-set PR, including
+  labelled PRs the ledger never linked. `--apply` and `--remove-labels` are
+  separate opt-ins; the default prints the plan and the `gh` commands. Nothing
+  else may clear the key: a release that was dispatched is not a release that
+  published. (PyAutoHands' release workflow also runs the label half after a
+  successful publish; the Mind half stays with this step.)
+- `lifecycle.py check` **errors** on a `pending-release:` value that is not
+  `<published-repo>@https://github.com/<owner>/<same-repo>/pull/<n>` — a
+  malformed line, a placeholder, or a non-published repo can never be
+  cleared, so it is drift.
+- `lifecycle.py check` **warns** (never errors) on a `complete/` record whose
+  well-formed `pending-release:` is still uncleared after
+  `PENDING_RELEASE_STALE_DAYS` (14) days. A stale link is a bookkeeping miss,
+  not drift — the library may legitimately not have been released yet.
+  `lifecycle.py check --network [<v>]` (opt-in; needs `gh`) adds a warning
+  for every link the latest (or named) release already contains, so a missed
+  sweep surfaces the same day instead of a fortnight later.
+
+The dashboard's **Pending release** section renders this **from the ledger
+only** — it never calls `gh` at render time, and it says so in its own blurb.
+The Brain board's live query stays the fresh view; the dashboard section is the
+view that works offline, in CI, and on a phone, and that says what the Mind
+*believes* rather than what GitHub *currently reports*. When the two disagree,
+GitHub is right and the ledger needs a `/review_release` pass.
 
 ### Task dates
 
@@ -457,6 +747,9 @@ and, appended by `lifecycle.py record`, the original prompt:
 - completed: YYYY-MM-DD
 - library-pr: <url> [, <url>]
 - workspace-pr: <url> [, <url>]
+- pending-release: <lib>@<pr-url>   # optional; carried from the active.md row by
+                                    # /prm, cleared by /review_release on a live
+                                    # run (see "The pending-release chain")
 - summary: <what landed, gotchas, follow-ups — free-form bullets>
 
 ## Original prompt
@@ -474,6 +767,81 @@ its `z_`-prefixed home redundant. The per-task completion records live in
 
 ---
 
+## How the ledger lands (`mind_ledger_merge.yml`)
+
+A branch-scoped session — a phone, web, or CLI run on `claude/**` or `codex/**` —
+pushes its Mind changes to a feature branch, never to `main`
+(`prompt_sync.sh` pushes HEAD deliberately, so a cloud session cannot bypass
+review). Nothing downstream used to move that branch on: no workflow so much as
+*looks* at those branch pushes, because `lifecycle_drift`, `dashboard_refresh`,
+`firewall_gate` and `spawn_drift` all trigger on `push: main` or
+`pull_request` only. A filed prompt, a task moved to `complete/`, a regenerated
+dashboard — all of it waited for a human to write an explicit "merge that
+branch" prompt, and the dashboard rendered a stale backlog until they did.
+
+`.github/workflows/mind_ledger_merge.yml` closes that seam. On every push to
+`claude/**`, `codex/**` or `chatgpt/**` it classifies the branch's diff against `main` and, when the whole
+diff is **ledger**, merges it and deletes the branch. No session step, no PR,
+no prompt.
+
+**Ledger** is drawn by `scripts/ledger_merge.py`, and it is **default deny**:
+
+| Ledger — merged automatically | Code — always a human |
+|---|---|
+| `draft/**`, `active/**`, `complete/**` | `scripts/`, `tests/`, `.github/`, `skills/`, `policy/`, `docs/` |
+| `active.md`, `planned.md`, `parked.md`, `condemned.md`, `epics.md`, `bundles.md`, `ideas.md`, `autonomy_log.md` | `repos.yaml`, `themes.md`, `README.md`, `AGENTS.md`, `REFERENCE.md`, `ROUTING.md`, … |
+| `dashboard.md`, `dashboard.html` | anything unclassified — a new root file, a new top-level folder |
+
+Two exceptions inside the ledger dirs: a **dot-path** anywhere, and a file
+pytest would **collect** (`conftest.py`, `test_*.py`, `*_test.py`) — inert
+prompt assets like `draft/bug/autofit/*_assets/run_once.py` ride along, a file
+CI would execute does not. The workflow's own file and the gate script are on
+the code side of the line, so neither can auto-merge a change to itself.
+
+Predict the verdict before you push:
+
+```bash
+python3 scripts/ledger_merge.py classify --base origin/main   # exit 0 = will auto-merge
+```
+
+`--base` reads the diff from git and nothing else — never stdin — so it is safe
+to run from a web/mobile session, whose stdin is a harness socket that never
+closes. Piped paths (`classify < paths`) are read only when neither explicit
+paths nor `--base` is given.
+
+What blocks, and what does not:
+
+- **`lifecycle.py check` blocks — for the branch's own paths.** Structural
+  drift — a prompt in `active/` with no `active.md` entry — is a real
+  contradiction and nothing heals it. The check runs `--paths <the branch's
+  diff> --base origin/main`, on the branch and again on the trial merge, so a
+  finding about a row the branch never touched is reported as out of scope
+  rather than stranding three records for it (run 34677840370, 2026-09-12).
+- **Renders are regenerated on the merged tree.** `complete/index.md`, the
+  registry contents blocks and the dashboard pages are rebuilt inside the
+  merge commit (and still self-heal on `main`, which the workflow dispatches
+  after the push because a `GITHUB_TOKEN` push triggers no workflows).
+- **A conflict is settled by the ledger's grammar first.** The merge is built
+  with `--no-commit`; `scripts/ledger_merge.py resolve` merges the `## slug`
+  registries (`active.md`, `planned.md`, `parked.md`, `condemned.md`,
+  `epics.md`) **by entry** — an entry changed on one side wins, an entry both
+  sides changed differently is the only conflict — takes `main`'s copy of the
+  renders, and leaves `autonomy_log.md` to git's `merge=union` driver
+  (`.gitattributes`; it is append-only). What that cannot settle blocks.
+- **A blocked branch is written on an issue** titled ``ledger merge: `<branch>`
+  needs a human`` (label `ledger-merge`), updated on every further attempt and
+  closed by the run that finally lands it. A red run nobody is subscribed to
+  is how six completion records went missing in August–September 2026.
+- **A branch already in `main` is deleted** the same way a freshly merged one
+  is, so a merge whose delete never fired does not stand forever (69 had by
+  2026-09-17).
+
+An open PR on the branch is merged **through** the PR, so it records as
+`MERGED`; a branch with no PR gets a direct merge commit and is then deleted on
+the same proof `branch_sweep.yml` uses — `main` must actually contain the head
+sha. `workflow_dispatch` runs the same gate in `audit` mode by default, so a
+manual look never merges by accident.
+
 ## Tracking and inspection
 
 ### Quick inventory
@@ -485,6 +853,87 @@ bash scripts/status.sh
 Prints counts per category, lists the active and recently-completed tasks, and
 and lists the recently-completed tasks.
 
+### Scoping a drift check to one branch — `check --paths`
+
+`lifecycle.py check` grades the whole repo, which is right on `main` and wrong
+on a branch: `mind_ledger_merge.yml` runs it over the merged tree, so a ledger
+branch that added three completion records was refused because an unrelated
+`active.md` row carried no `library-pr:` (run 34677840370, 2026-09-12) — drift
+the branch neither caused nor could fix. A branch can only be held to its own
+diff:
+
+```bash
+python3 scripts/lifecycle.py check --paths $(git diff --name-only origin/main) \
+                                   --base origin/main
+```
+
+- `--paths` is repeatable and takes a space-separated list; a directory covers
+  everything under it. Findings about anything else are printed as
+  `~ out of scope: …` — reported, so nothing is hidden, but they leave the exit
+  code alone.
+- A finding about a *prompt* or a *record* is in scope when that file is
+  listed. A finding about a **registry entry** is in scope when the entry's
+  `prompt:` path — or a file its slug names, in `active/` or in `complete/` —
+  is listed. That last rule is what makes `--paths <the record you just wrote>`
+  answer for the `active.md` row you forgot to drop with it: the row and the
+  record are the same task under two names.
+- Naming a registry file itself (`active.md`, `planned.md`, `parked.md`) puts
+  **all** its entries in scope, because nothing in the file says which rows the
+  diff touched. `--base <ref>` supplies that: it diffs the registry against the
+  ref and counts only the entries the hunks land in. An unreadable ref (a typo,
+  a shallow clone) reads as "all of them" — unknown never shrinks the scope.
+- A finding about no path at all (the shallow-clone note) is a fact about the
+  checkout and stays in scope wherever it runs.
+
+Without `--paths`, behaviour is exactly what it was.
+
+### Closing a task out — `close`
+
+The Mind side of `/prm` as one verb. It **composes** the existing verbs rather
+than reimplementing them (`record` still writes the record, folds the prompt,
+refreshes `complete/index.md` and prunes `active.md`; `shadow-row` still
+appends to the window):
+
+```bash
+python3 scripts/lifecycle.py close <slug> --date YYYY-MM-DD --from-file <body.md> \
+    [--prompt <path|filename>] [--pr Repo#N …] \
+    [--tier glance --gate "<cell>" --action <merged-unchanged|…> [--stage 1|2]] \
+    [--no-shadow-row] [--apply]
+```
+
+Dry run by default: it prints the record path, the prompt it will remove, every
+registry entry it will drop, the shadow row it would append, and the references
+it found — and writes nothing. `--apply` does it.
+
+- **The prompt resolves anywhere it can be.** `record --prompt` resolves under
+  `active/` only and no-ops in silence when it misses; `close` looks in
+  `active/`, in the registries' own `prompt:` paths and in `draft/` (a task may
+  ship straight off a draft, which `record` cannot fold at all). `--prompt`
+  takes a repo-relative path or a bare filename.
+- **It drops the `parked.md` / `planned.md` pointer too**, which `record` does
+  not — only `active.md` was ever pruned.
+- **The shadow row is never inferred.** Only `--tier glance` feeds the window
+  (re-scoped from `notify` on 2026-10-02, when `notify` auto-merge was granted),
+  and only with `--gate` and `--action`: the row records the gate that *ran* and
+  what *happened* to the PR — `merged-unchanged` at an auto-merge, amended by
+  the human if they later find something substantive, `reverted` if it was
+  backed out — so a missing cell yields no row and a line saying so.
+  `--no-shadow-row` suppresses the leg outright.
+- **Two refusals**, both exit 1: a record for the slug already exists anywhere
+  under `complete/` (a completion record is the one file here that is not
+  regenerable), or the slug resolves to no prompt in `active/`, `draft/` or a
+  registry.
+- **It reports, it does not repoint.** Remaining mentions of the closed task in
+  `draft/`, `active/`, `epics.md`, `planned.md` and `parked.md` print under
+  "repoint these" — which ones the merge falsified is a judgement.
+- **It does not render the dashboard.** The state is the Mind's and the renderer
+  is the Brain's, and `main` heals the render (`dashboard_refresh.yml`); the
+  `pyauto-brain intake --apply dashboard` line is printed as the optional next
+  step.
+- **It stages nothing.** The record is written and the prompt removed with plain
+  filesystem ops; `git add -A` what it changed, then
+  `check --paths` before you push.
+
 ### From inside Claude Code
 
 - `/health status` — dashboard of registry state (active, planned, recent complete; PyAutoHeart, via the `/health` door)
@@ -495,12 +944,11 @@ and lists the recently-completed tasks.
 
 ## How this repo integrates with the rest
 
-The PyAuto workflow has three repos with distinct roles:
+The PyAuto workflow has these repos with distinct roles:
 
 | Repo | Purpose |
 |------|---------|
 | **PyAutoMind** (this repo) | The Mind: ideas, intent, goals, priorities, the prompt registry and prompt-coupled skills. The starting point. |
-| **admin_jammy** | Personal admin notes only (`euclid.md`, `grants.md`, `week.md`, `travel.md`, …). Formerly also held PyAuto tooling under `software/`; that has moved out (worktree/label scripts → `PyAutoBrain/bin/`, generic skills → Brain/Heart). |
 | **PyAutoMemory** | The Memory organ: topical LLM wikis (`wiki/lensing/`, `wiki/smbh/`, `wiki/cti/`, `wiki/methods/`, `wiki/galaxies/`) and a reading queue (`reading-queue.md`, moved from `admin_jammy/papers.md`). |
 | **`PyAuto*` libraries and `*_workspace*` repos** | Where the actual code work happens. Each task gets a feature branch + worktree under `~/Code/PyAutoLabs-wt/<task-name>/`. |
 
@@ -520,7 +968,6 @@ cd ~/Code/PyAutoLabs
 git clone git@github.com:PyAutoLabs/PyAutoMind.git    # the Mind (this repo)
 git clone git@github.com:PyAutoLabs/PyAutoBrain.git   # dev-workflow skills
 git clone git@github.com:PyAutoLabs/PyAutoHeart.git   # status / readiness skills
-git clone git@github.com:Jammy2211/admin_jammy.git    # general tooling (optional)
 bash PyAutoBrain/bin/install.sh                        # symlinks skills + commands
 ```
 
@@ -534,3 +981,157 @@ bash PyAutoBrain/bin/install.sh                        # symlinks skills + comma
 `PyAutoHeart/skills/`, `autolens_profiling/skills/`) and creates symlinks under
 `~/.claude/skills/` and `~/.claude/commands/`. Roots that aren't checked out are
 skipped. Re-run any time after pulling new skills from any of those repos.
+
+## Agent operational walkthrough
+
+This longer walkthrough is loaded when a Mind operation needs its detail;
+`AGENTS.md` holds the immediately applicable rules.
+
+## Layout (operational)
+
+- **Prompt lifecycle (issue #71)** — a prompt file advances through three
+  top-level state folders, mirroring the task ledger:
+  - `draft/<work-type>/<target>/<name>.md` — intaken, **not started**. The
+    first folder under `draft/` is the *kind of work*; the second is the
+    *target repo or domain*. Work-types: `feature/`, `bug/`, `refactor/`,
+    `docs/`, `test/`, `release/`, `maintenance/`, `research/`
+    (plus `triage/` for prompts whose classification is still unclear, and
+    `human_review/` for work that already shipped and a human wants to sign
+    off — declaration-only, see below).
+    PyAutoBrain routes by the work-type folder — see [Prompt taxonomy](#prompt-taxonomy) and `ROUTING.md`.
+  - `active/<name>.md` — **issued** (an open GitHub issue / in flight). The
+    ship skills advance the file to `complete/` on merge.
+  - `complete/<YYYY>/<MM>/<slug>.md` — **shipped**; the rich completion record
+    (see `complete/AGENTS.md`). Months are zero-padded so lexical order is
+    numerical order. `scripts/lifecycle.py` owns the moves and drift-checks
+    them.
+
+  Retired non-record material lives in **`complete/archive/`** (skipped by
+  `lifecycle.py check`/`index`): `archive/epics/` (former `z_features/`
+  multi-task trackers) and `archive/shelved/` (former `z_vault/` deferred
+  prompts + dev notes). The old `z_features/`, `z_vault/` and `autoprompt/`
+  top-level folders were retired here on 2026-07-13.
+- **Registry** — root-level markdown files, each with one job: `active.md`
+  (in-flight tasks), `planned.md` (scoped, not started), `parked.md` (started
+  but not in flight), `condemned.md` (self-material staged for the Gut's
+  transit-and-void lifecycle — see PyAutoGut), `epics.md` (long-running
+  multi-phase programmes and the ledger file that holds each one's state),
+  `ideas.md` (raw inbox swept by
+  `$intake`, `/intake` in Claude). Mutate these only via the skills in `skills/` so commit
+  messages stay consistent.
+  `dashboard.md` is the **generated** read-only view over all of it (the page
+  the README links): regenerate with `pyauto-brain intake --apply dashboard`
+  after any registry or `draft/` change you want reflected immediately — never
+  hand-edit it. `dashboard_refresh.yml` self-heals it on pushes to `main`, so a
+  missed regeneration is drift that fixes itself, not a broken page — but it
+  heals only the **render**. A prompt that shipped and was never retired to
+  `complete/` renders faithfully, as pickable backlog, and no workflow can tell
+  the difference; retiring it is a human/skill judgement. Per task that is
+  `/prm`'s close-out (it sweeps the shipped prompt's folder and regenerates the
+  page in the same commit); across the whole backlog it is
+  `pyauto-brain intake reconcile` plus the refresh payload on the dashboard
+  itself.
+  `parked.md` holds tasks that were started or scoped but are not currently
+  in flight (e.g. work parked in a stash, orphan worktrees); move back to
+  `active.md` (or `planned.md` if re-scoping) when resuming.
+- **Body map** — `repos.yaml` is the single source of repo *identity* (GitHub
+  home, category, one-line role) and explicit generated-adapter rollout for
+  every repo in the workspace. The routing
+  table in the workspace-root `AGENTS.md` and the owner map in
+  `PyAutoBrain/skills/WORKFLOW.md` are generated from it, and the repo lists in
+  Heart/Build/admin scripts are drift-checked against it:
+  `python3 scripts/repos_sync.py --write`.
+- **Policy** — `policy/` holds the universal rules single-sourced here and
+  generated verbatim into every repo's AGENTS.md by `repos_sync.py --write`:
+  `never_rewrite_history.md`, `remote_sessions.md`, `end_at_deliverable.md`,
+  `where_to_file.md`
+  (plus the hooks that enforce them, `session_start_hook.sh` and
+  `end_at_deliverable_hook.sh`). Edit the canonical file, never a generated copy.
+  `repos_sync.py --write --only "generated Codex hooks"` renders opted-in
+  `.codex/hooks.json` adapters without touching the broader generated surface.
+  Codex users must review and trust the exact current hook hash with `/hooks`;
+  changed or untrusted project hooks are skipped. These adapters register the
+  reviewed PreToolUse safety guards only. The remote Python SessionStart
+  bootstrap remains Claude-specific and is not silently copied into Codex.
+  `community_surface.md` is the one policy page that is *not* generated
+  anywhere: it decides where users go (one Discussions hub) and where the
+  development flow stays (per-repo issues); the Ears and the README Support
+  sections read it as doctrine.
+- **Skills** — `skills/<name>/` are agent skills and command bodies tightly
+  coupled to the registry. Claude and Codex discovery is installed by
+  PyAutoBrain; they source `scripts/prompt_sync.sh` for commit/push.
+- **Ledger auto-merge** — a push to `claude/**`, `codex/**` or `chatgpt/**` whose whole diff is *ledger*
+  (`draft/`, `active/`, `complete/`, the root registry files, the dashboard
+  pages) is merged into `main` by `.github/workflows/mind_ledger_merge.yml` and
+  the branch deleted — no PR, no session step, no "please merge that" prompt.
+  Anything touching `scripts/`, `tests/`, `.github/`, `skills/`, `policy/`,
+  `docs/`, `repos.yaml` or the prose pages is left for a human, as is anything
+  unclassified (the gate is default deny). So: **push your Mind work and move
+  on** — do not leave a ledger branch hanging, and do not expect a code branch
+  to land by itself. `python3 scripts/ledger_merge.py classify --base
+  origin/main` tells you which side you are on before you push; the full
+  contract is in [REFERENCE.md](REFERENCE.md) "How the ledger lands". A
+  conflict on the registries or the generated pages is settled by the
+  ledger's own grammar (`ledger_merge.py resolve`: entries merge by slug,
+  renders take main and are regenerated); a branch that still cannot land
+  gets an issue labelled `ledger-merge`, never a silent red run.
+  Optional `active.md` session metadata records the actual harness and a known
+  resume command when available; existing `claude --resume` values remain valid.
+  An ordinary ChatGPT conversation that needs to publish **Mind ledger-only**
+  state uses a `chatgpt/**` Mind branch so the identical default-deny ledger
+  gate can land it. This namespace is only a transport adapter: it grants no
+  extra paths, autonomy or merge authority. Development/source branches keep
+  their normal task branch names. No OpenAI API key or API Platform call is
+  involved.
+- **Scripts** — `scripts/status.sh` (inventory), `scripts/prompt_sync.sh`
+  (commit/push helpers), `scripts/lifecycle.py` (state moves + drift checks;
+  `lifecycle.py dates [--write]` reports/backfills the date every registry
+  entry and issued prompt carries — see [REFERENCE.md](REFERENCE.md) "Task
+  dates").
+
+## When you are asked to add a new prompt
+
+Write the file under `draft/<work-type>/<target>/<name>.md` — pick the work-type
+from the list above (use `triage/` if genuinely unsure — never `human_review/`,
+see below) and the target
+repo/domain as the second folder, e.g. `draft/feature/autolens/potential_corrections.md`
+or `draft/bug/autoarray/mask_edge_case.md`. Don't touch `active.md`, `active/`
+or `complete/` directly — those are managed by `$start-dev`, `$create-issue`
+and the ship skills (`/start_dev` and `/create_issue` in Claude).
+
+To skip the manual filing, run **`$intake`** (`/intake` in Claude), the
+PyAutoBrain Intake/Conception Agent. It classifies a raw idea into the right
+`draft/<work-type>/<target>/` folder,
+writes the light header (incl. the optional `Difficulty:/Autonomy:/Priority:`
+keys — see [Prompt file format](#prompt-file-format)), and files the prompt for you. It files a
+prompt only; `$start-dev` (`/start_dev` in Claude) remains the separate next step.
+
+## When you are asked for a human review
+
+`draft/human_review/<target>/<name>.md` holds work that has already **shipped**
+and that a human wants to read and sign off before it counts as done. It is the
+one work-type nothing may infer: file one only when a human asks for it, by
+declaring `Type: human review` (`human-review`/`human_review` read the same) —
+`/intake` will never choose it, and no completed task acquires it by default.
+Review is opt-in, not a lifecycle stage: `/prm` and the ship skills close a task
+out exactly as before and never file a review.
+
+It renders as its own **Human review** section on `dashboard.md`, directly under
+*In flight*, and is deliberately not counted as backlog — a review is not work to
+pick up, it is work waiting on a person. Its 📋 hands out a read-and-report
+prompt, not a `/start_dev`. Sign one off by retiring the prompt the usual way
+(`scripts/lifecycle.py record …`, then regenerate the dashboard); if it does not
+pass, the follow-up is an ordinary `$intake`.
+
+## When you are asked to start work on an existing prompt
+
+Use `$start-dev draft/<work-type>/<target>/<name>.md` (`/start_dev` in Claude).
+Older `<work-type>/<target>/<name>.md` and bare `<target>/<name>.md` paths from
+before the lifecycle migration still resolve. It
+routes to `$start-library` or `$start-workspace` (`/start_library` or
+`/start_workspace` in Claude) based on the repos referenced in the prompt body;
+routing keys off `@RepoName` references in the content, not the folder.
+
+## When in doubt
+
+Read [README.md](README.md). It is current as of the last commit on this branch.

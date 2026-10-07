@@ -25,6 +25,18 @@ Subcommands
         completion body in <path> (drafted by the ship skill), folding and
         removing the active/ prompt. Run `index --apply` afterwards.
 
+  close <slug> --date YYYY-MM-DD --from-file <path> [--prompt <path|name>]
+        [--pr Repo#N ...] [--tier glance --gate "<cell>" --action <what>]
+        [--no-shadow-row] [--apply]
+        The /prm hook: the whole Mind-side close-out as one verb — `record`
+        (which folds the prompt, refreshes the index and prunes active.md),
+        plus the parked.md/planned.md pointer, plus the tier-`glance` shadow
+        row, plus the sweep for references the merge falsified (printed, never
+        rewritten). Dry run by default. Unlike `record --prompt` it resolves a
+        draft/ prompt too, and it stages nothing. It does NOT render the
+        dashboard — `main` heals the render — and it refuses when the record
+        already exists or the slug names no prompt.
+
   index [--apply | --check]
         Generate complete/index.md (token-light navigation over the records);
         --check fails if it is stale (CI).
@@ -34,7 +46,7 @@ Subcommands
         --write to backfill it from git history (the commit that introduced
         the entry / moved the prompt into active/). See "task dates" below.
 
-  check
+  check [--paths PATH ...] [--base REF]
         Drift guard (mirrors repos_sync.py --check; non-zero exit on drift):
           * no active.md slug has a complete/ record (finished but still active)
           * no file lives in two states at once
@@ -44,7 +56,12 @@ Subcommands
           * no active/ prompt is left unclaimed by every registry
           * nothing lives under active/ except top-level prompt .md files
             (subdirectories and scripts are invisible to every other guard)
-        Wire into /health and CI.
+        Wire into /health and CI. `--paths` scopes the EXIT CODE to the
+        findings about those paths (a branch can only be held to its own
+        diff — see REFERENCE.md "Scoping a drift check to one branch");
+        everything else prints as `~ out of scope`. With a registry file in
+        --paths, `--base <ref>` narrows it to the entries that ref's diff
+        touched.
 
   orphans
         The focused view of `check`'s last leg: active/ prompts that no registry
@@ -67,9 +84,11 @@ environment, including a bare template checkout.
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parent.parent
 ACTIVE_DIR = ROOT / "active"
@@ -79,6 +98,35 @@ COMPLETE_DIR = ROOT / "complete"
 ARCHIVE_DIR = COMPLETE_DIR / "archive"
 DRAFT_DIR = ROOT / "draft"
 ACTIVE_MD = ROOT / "active.md"
+AUTONOMY_LOG = ROOT / "autonomy_log.md"
+
+# --- the tier-`glance` shadow window ---------------------------------------
+# The window ran over tier-`notify` candidates (protocol prompt:
+# batch_notify_tier_merge, 40 rows) until 2026-10-02, when the human granted
+# `notify` auto-merge early at 13/40, all clean, by dated doctrine edit
+# (PyAutoBrain/AUTONOMY.md "Merge authority follows Consequence — 2026-10-02")
+# and re-scoped the window to tier `glance`: each auto-merged `glance` PR
+# appends one row, recorded `merged-unchanged` at merge and amended by the
+# human if they find something substantive. `glance` is confirmed at 20 clean
+# rows; any `reverted` row demotes the tier back to a human `/prm`. The
+# `notify` rows stay listed as history and are named as uncounted.
+SHADOW_HEADING = "## Shadow window"
+SHADOW_TABLE_HEADER = "| date | task | tier | gate"
+SHADOW_TIER = "glance"
+SHADOW_ACTIONS = (
+    "merged-unchanged",
+    "merged-after-substantive-change",
+    "not-merged",
+    "reverted",
+)
+SHADOW_STAGES = ("1", "2")
+SHADOW_TARGET = 20
+SHADOW_REOPENED = "2026-10-02"
+# Rows dated before this are the pre-`/prm` history: listed, never counted as
+# "the first row `/prm` appended".
+SHADOW_PRM_EPOCH = "2026-09-07"
+SHADOW_COUNT_PREFIX = f"Count toward {SHADOW_TARGET}:"
+SHADOW_COUNT_ANCHOR = "One row per tier-`glance` candidate"
 
 H2_RE = re.compile(r"^##\s+(.+?)\s*$")
 
@@ -109,6 +157,173 @@ def ledger_slugs(path: Path) -> "set[str]":
             slugs.add(_slugify_h2(m.group(1)))
     return slugs
 
+
+# --------------------------------------------------------------------------- #
+# findings — a drift line plus WHICH FILES it is about
+#
+# `check` grades the whole repo, which is right on main and wrong on a branch.
+# `mind_ledger_merge.yml` runs it over the merged tree, so a ledger branch that
+# added three completion records was refused because an unrelated active.md row
+# carried no `library-pr:` (run 34677840370, 2026-09-12) — drift the branch
+# neither caused nor could fix. A branch can only be held to its own diff, so
+# every finding carries the paths it is ABOUT and `check --paths` grades it
+# against them; findings about anything else are printed as `~ out of scope`
+# and leave the exit code alone.
+# --------------------------------------------------------------------------- #
+class Finding(NamedTuple):
+    """One drift/warning line plus what it is about.
+
+    `paths` are repo-relative posix paths the finding concerns. `entries` are
+    the `(registry file, slug)` pairs it concerns, graded separately because a
+    registry file holds many unrelated entries — naming `active.md` in a diff
+    must not drag in every other row. So a finding about an entry keeps the
+    registry file OUT of `paths`: the file reaches it only through `entries`,
+    where `--base` can narrow it to the rows the diff touched."""
+    msg: str
+    paths: "tuple[str, ...]" = ()
+    entries: "tuple[tuple[str, str], ...]" = ()
+
+
+def _rel(root: Path, path: Path) -> str:
+    """Repo-relative posix path, or the absolute one if it is outside root."""
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def entry_files(root: Path, slug: str, raw: "str | None" = None) -> "list[str]":
+    """The files a registry entry is about: its `prompt:` path, the active/
+    prompt its slug names, and any complete/ record of the same slug.
+
+    This is what makes `--paths <the record this branch wrote>` scope in the
+    `active.md` row that should have been dropped with it — the row and the
+    record are the same task under two names."""
+    out: "list[str]" = []
+    if raw:
+        resolved, _ = resolve_prompt(root, raw.split()[0])
+        if resolved is not None:
+            out.append(_rel(root, resolved))
+    want = safe_name(slug)
+    active = root / "active"
+    if active.is_dir():
+        out += [_rel(root, f) for f in sorted(active.glob("*.md"))
+                if safe_name(f.stem) == want]
+    complete = root / "complete"
+    if complete.is_dir():
+        archive = complete / "archive"
+        out += [_rel(root, f) for f in sorted(complete.rglob("*.md"))
+                if f.name != "index.md" and archive not in f.parents
+                and safe_name(f.stem) == want]
+    return list(dict.fromkeys(out))
+
+
+def scope_paths(root: Path, raw) -> "list[str]":
+    """Normalise `--paths` values to repo-relative posix paths.
+
+    Tolerant on purpose — the caller is usually a workflow pasting
+    `git diff --name-only` output, which may arrive repeated, space-separated,
+    absolute, or `./`-prefixed."""
+    out: "list[str]" = []
+    for item in raw or []:
+        for part in str(item).split():
+            p = part.strip().strip('"').rstrip("/")
+            if not p:
+                continue
+            cand = Path(p)
+            if cand.is_absolute():
+                p = _rel(root, cand)
+            elif p.startswith("./"):
+                p = p[2:]
+            if p and p not in out:
+                out.append(p)
+    return out
+
+
+def _covered(path: str, wanted: "list[str]") -> bool:
+    """Is `path` one of the wanted paths, or under a wanted directory?"""
+    return any(path == w or path.startswith(w + "/") for w in wanted)
+
+
+HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def touched_entries(root: Path, registry: str,
+                    base: "str | None") -> "set[str] | None":
+    """`safe_name` slugs of the registry entries the diff against `base` touched.
+
+    None means "cannot tell" (no `--base`, no git, an unknown ref) — the caller
+    then treats every entry in a listed registry file as in scope, which is the
+    safe direction: it can only report more drift, never less."""
+    if not base:
+        return None
+    path = root / registry
+    if not path.is_file():
+        return None
+    if not _git(root, ["rev-parse", "--verify", "--quiet", f"{base}^{{commit}}"]):
+        return None
+    lines = path.read_text(errors="replace").splitlines()
+    # line number (1-based) -> the entry heading it sits under
+    owner: "list[str | None]" = []
+    current: "str | None" = None
+    for line in lines:
+        m = H2_RE.match(line)
+        if m:
+            current = safe_name(_slugify_h2(m.group(1)))
+        owner.append(current)
+
+    touched: "set[str]" = set()
+    for line in _git(root, ["diff", "--unified=0", base, "--", registry]):
+        m = HUNK_RE.match(line)
+        if not m:
+            continue
+        start = int(m.group(1))
+        count = int(m.group(2)) if m.group(2) is not None else 1
+        # A pure deletion (count 0) is anchored at the line BEFORE it in the
+        # new file — that line's entry is the one that lost something.
+        first = max(start, 1)
+        for ln in range(first, first + max(count, 1)):
+            if 1 <= ln <= len(owner) and owner[ln - 1]:
+                touched.add(owner[ln - 1])
+    return touched
+
+
+def in_scope(root: Path, finding: Finding, wanted: "list[str]",
+             base: "str | None" = None,
+             _touched: "dict | None" = None) -> bool:
+    """Is this finding about one of the wanted paths?
+
+    A finding with neither paths nor entries is repo-wide (a shallow-clone
+    note, say) and is always in scope — scoping narrows what a branch is
+    ANSWERABLE for, and nothing is answerable for a fact about the checkout."""
+    if not wanted:
+        return True
+    if not finding.paths and not finding.entries:
+        return True
+    if any(_covered(p, wanted) for p in finding.paths):
+        return True
+    cache = _touched if _touched is not None else {}
+    for reg, slug in finding.entries:
+        if any(_covered(p, wanted) for p in entry_files(root, slug)):
+            return True
+        if not _covered(reg, wanted):
+            continue
+        if reg not in cache:
+            cache[reg] = touched_entries(root, reg, base)
+        touched = cache[reg]
+        if touched is None or safe_name(slug) in touched:
+            return True
+    return False
+
+
+def scope_findings(root: Path, findings: "list[Finding]", wanted: "list[str]",
+                   base: "str | None" = None) -> "tuple[list[Finding], list[Finding]]":
+    """Split findings into (in scope, out of scope) for `--paths`."""
+    cache: "dict[str, set[str] | None]" = {}
+    hits, misses = [], []
+    for f in findings:
+        (hits if in_scope(root, f, wanted, base, cache) else misses).append(f)
+    return hits, misses
 
 # --------------------------------------------------------------------------- #
 # registry integrity
@@ -194,17 +409,25 @@ def resolve_prompt(root: Path, raw: str) -> "tuple[Path | None, str | None]":
 
 
 def registry_problems(root: Path) -> "list[str]":
-    """Drift across active.md / planned.md / parked.md."""
-    problems: "list[str]" = []
+    """Drift across active.md / planned.md / parked.md (message lines only)."""
+    return [f.msg for f in registry_findings(root)]
+
+
+def registry_findings(root: Path) -> "list[Finding]":
+    """Drift across active.md / planned.md / parked.md, each attributed to the
+    registry file, the entry and the prompt path it is about (`--paths`)."""
+    problems: "list[Finding]" = []
     seen: "dict[str, str]" = {}
 
     for reg in REGISTRY_FILES:
         for slug, fields in registry_entries(root / reg):
             key = safe_name(slug)
             if key in seen and seen[key] != reg:
-                problems.append(
-                    f"slug listed in two registries: {slug} ({seen[key]} + {reg})"
-                )
+                problems.append(Finding(
+                    f"slug listed in two registries: {slug} ({seen[key]} + {reg})",
+                    (),
+                    ((seen[key], slug), (reg, slug)),
+                ))
             seen.setdefault(key, reg)
 
             raw = fields.get("prompt")
@@ -214,29 +437,30 @@ def registry_problems(root: Path) -> "list[str]":
             # ("... .md (carries the phase-1 record)") — the path is the first
             # token, the rest is prose for a human.
             raw = raw.split()[0]
+            entry = ((reg, slug),)
             resolved, state = resolve_prompt(root, raw)
             if resolved is None:
-                problems.append(f"{reg}: {slug}: prompt path does not resolve: {raw}")
+                problems.append(Finding(
+                    f"{reg}: {slug}: prompt path does not resolve: {raw}",
+                    (raw,), entry))
                 continue
 
             rel = resolved.relative_to(root).as_posix()
+            where = (rel,)
             expected = EXPECTED_STATE[reg]
             if state == "complete":
-                problems.append(
+                problems.append(Finding(
                     f"{reg}: {slug}: prompt is a complete/ record (shipped but "
-                    f"still listed): {rel}"
-                )
+                    f"still listed): {rel}", where, entry))
             elif state not in expected:
                 want = "/ or ".join(sorted(expected))
-                problems.append(
+                problems.append(Finding(
                     f"{reg}: {slug}: prompt is in {state}/ but {reg} implies "
-                    f"{want}/: {rel}"
-                )
+                    f"{want}/: {rel}", where, entry))
             elif rel != raw:
-                problems.append(
+                problems.append(Finding(
                     f"{reg}: {slug}: legacy prompt path, resolves only via "
-                    f"fallback: {raw} -> {rel}"
-                )
+                    f"fallback: {raw} -> {rel}", where, entry))
     return problems
 
 
@@ -818,6 +1042,674 @@ def pr_problems(root: Path, fetch=None) -> "list[str]":
     return problems
 
 
+# --------------------------------------------------------------------------- #
+# the PR ledger
+#
+# `library-pr:` / `workspace-pr:` were written by ship_library and read by /prm
+# for months before anything validated them: they were absent from the
+# `active.md` schema, so a row could declare `status: awaiting-merge` and name
+# no PR at all, and /prm would have nothing to merge. The keys are REPEATABLE —
+# one task may open several PRs of a kind — which is why they need their own
+# parse: `registry_entries` keeps the first occurrence of a key, matching how a
+# reader scans a block, and would silently drop the rest.
+#
+# The chain these keys carry is documented once in REFERENCE.md ("The PR keys"
+# and "The pending-release chain"); this module only enforces it.
+# --------------------------------------------------------------------------- #
+PR_KEYS = ("library-pr", "workspace-pr")
+
+# A `status:` containing any of these declares the PRs exist, so the row must
+# say where they are. Matched case-insensitively against the status line only.
+SHIP_STATUS_TOKENS = ("awaiting-merge", "pr open", "pr-open", "shipped")
+
+# How long a `complete/` record may keep an uncleared `pending-release:` before
+# the check mentions it. A warning, never an error: the library may simply not
+# have been released yet, which is the normal state of the key. Releases ship
+# every few days, so two weeks uncleared already means a missed sweep (the
+# 2026-09-27 .. 2026-10-04 releases went unswept for 10 days under a 30-day
+# window that never fired).
+PENDING_RELEASE_STALE_DAYS = 14
+
+# The PUBLISHED SET — the only repos a `pending-release:` link may name, and the
+# only repos whose PRs carry the `pending-release` label. Defined once, here.
+# It mirrors the `release` job matrix of PyAutoHands/.github/workflows/release.yml
+# (the job that twine-uploads to PyPI and pushes the bare `<version>` tag); a
+# repo outside it is never published, so no release could ever clear a link to
+# it. Workspaces are tagged by `release_workspaces` but never uploaded to PyPI,
+# and organs ship on merge: neither belongs here. Change it only together with
+# that matrix (and PyAutoBrain/bin/ensure_workspace_labels.sh).
+PUBLISHED_REPOS = (
+    "PyAutoNerves",
+    "PyAutoFit",
+    "PyAutoArray",
+    "PyAutoGalaxy",
+    "PyAutoLens",
+)
+# The GitHub owner the published set lives under, and the repo whose latest
+# GitHub release names the current version (`--version latest`).
+PUBLISHED_OWNER = "PyAutoLabs"
+RELEASE_VERSION_REPO = "PyAutoLens"
+
+# A well-formed value: `<repo>@https://github.com/<owner>/<repo>/pull/<n>`,
+# nothing else on the line, and the two repo names agree.
+PENDING_RELEASE_RE = re.compile(
+    r"^([\w.-]+)@https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)$")
+
+
+def registry_multi(path: Path) -> "list[tuple[str, dict[str, list[str]]]]":
+    """[(slug, {key: [value, ...]})] — every occurrence of every key.
+
+    The repeat-tolerant twin of `registry_entries`. Used only where a key is
+    legitimately repeatable (the PR keys, `pending-release:`, `release-gate:`);
+    everything else should keep reading `registry_entries`, whose first-wins
+    rule matches how a human scans the block."""
+    entries: "list[tuple[str, dict[str, list[str]]]]" = []
+    if not path.exists():
+        return entries
+    fields: "dict[str, list[str]]" = {}
+    slug = None
+    for line in path.read_text(errors="replace").splitlines():
+        m = H2_RE.match(line)
+        if m:
+            if slug is not None:
+                entries.append((slug, fields))
+            slug, fields = _slugify_h2(m.group(1)), {}
+            continue
+        if slug is None:
+            continue
+        f = FIELD_RE.match(line)
+        if f:
+            fields.setdefault(f.group(1).strip(), []).append(f.group(2).strip())
+    if slug is not None:
+        entries.append((slug, fields))
+    return entries
+
+
+def pr_urls(values: "list[str]") -> "list[str]":
+    """Every PR URL across a repeated key's values.
+
+    Both written forms collapse here: one line per URL (the schema's preferred
+    shape) and the older single line of `<url>, <url>`. Trailing prose is
+    ignored — the URLs are matched, not the field."""
+    out: "list[str]" = []
+    for value in values:
+        for m in PR_URL_RE.finditer(value):
+            if m.group(0) not in out:
+                out.append(m.group(0))
+    return out
+
+
+def pr_key_problems(root: Path) -> "list[str]":
+    """`active.md` rows that declare open/shipped PRs and name none."""
+    return [f.msg for f in pr_key_findings(root)]
+
+
+def pr_key_findings(root: Path) -> "list[Finding]":
+    """The same rule, attributed to the row it is about.
+
+    The row says `/prm` has work to do and then withholds the only thing it
+    needs — a contradiction inside one entry, which is exactly what this check
+    is for, so it is drift and not a warning."""
+    problems: "list[Finding]" = []
+    for slug, multi in registry_multi(root / "active.md"):
+        status = " ".join(multi.get("status", [])).lower()
+        if not any(tok in status for tok in SHIP_STATUS_TOKENS):
+            continue
+        if any(pr_urls(multi.get(key, [])) for key in PR_KEYS):
+            continue
+        prompt = (multi.get("prompt") or [None])[0]
+        paths: "list[str]" = []
+        if prompt:
+            resolved, _ = resolve_prompt(root, prompt.split()[0])
+            if resolved is not None:
+                paths.append(_rel(root, resolved))
+        problems.append(Finding(
+            f"active.md: {slug}: status declares open/shipped PRs but the row "
+            f"carries no `library-pr:`/`workspace-pr:` — /prm has nothing to "
+            f"merge (REFERENCE.md \"The PR keys\")",
+            tuple(paths), (("active.md", slug),)))
+    return problems
+
+
+def _record_fields(path: Path) -> "dict[str, list[str]]":
+    """The record's own fields — everything above `## Original prompt`.
+
+    `lifecycle.py record` appends the task's starting prompt verbatim, and that
+    prompt may itself quote `library-pr:` lines from some other task. Reading
+    past the boundary would attribute them to this record."""
+    text = path.read_text(errors="replace")
+    head = re.split(r"^##\s+Original prompt\s*$", text, maxsplit=1,
+                    flags=re.M | re.I)[0]
+    fields: "dict[str, list[str]]" = {}
+    for line in head.splitlines():
+        f = FIELD_RE.match(line)
+        if f:
+            fields.setdefault(f.group(1).strip(), []).append(f.group(2).strip())
+    return fields
+
+
+def pending_release_problems(root: Path,
+                             today: "str | None" = None) -> "list[str]":
+    """`complete/` records whose `pending-release:` is long uncleared."""
+    return [f.msg for f in pending_release_findings(root, today)]
+
+
+def pending_release_findings(root: Path,
+                             today: "str | None" = None) -> "list[Finding]":
+    """The same warnings, each attributed to the record it is about.
+
+    A warning by construction: the key means "merged, not yet on PyPI", which
+    is a legitimate state for as long as the release takes. What it stops being
+    legitimate at is a month — by then either the release happened and
+    `/review_release` never swept the ledger, or the release is itself the
+    problem."""
+    complete = root / "complete"
+    archive = complete / "archive"
+    if not complete.is_dir():
+        return []
+    now = _dt.date.fromisoformat(today) if today else _dt.date.today()
+    problems: "list[Finding]" = []
+    for f in sorted(complete.rglob("*.md")):
+        if archive in f.parents or f.name == "index.md":
+            continue
+        fields = _record_fields(f)
+        links = fields.get("pending-release") or []
+        if not links:
+            continue
+        dates = fields.get("completed") or []
+        m = ISO_DATE_RE.search(dates[0]) if dates else None
+        if not m:
+            continue
+        age = (now - _dt.date.fromisoformat(m.group(1))).days
+        if age < PENDING_RELEASE_STALE_DAYS:
+            continue
+        problems.append(Finding(
+            f"{f.relative_to(root)}: `pending-release:` still uncleared "
+            f"{age}d after completion ({', '.join(links)}) — if the release "
+            f"happened, /review_release never swept the ledger",
+            (_rel(root, f),)))
+    return problems
+
+
+# --------------------------------------------------------------------------- #
+# the pending-release chain: format, and clearing it after a release
+#
+# REFERENCE.md "The pending-release chain" is the contract. Two leaks motivated
+# this block: four releases published without the /review_release sweep, and
+# ~90 links named repos that never publish (organs, workspaces, profiling), so
+# no release could ever clear them. The format check stops the second; the
+# `clear-released` verb makes the first a single command.
+# --------------------------------------------------------------------------- #
+class PendingLink(NamedTuple):
+    """One `- pending-release:` line where the dashboard reads it."""
+    path: str          # repo-relative file
+    lineno: int        # 1-based
+    slug: str          # the active.md row / record the line belongs to
+    value: str         # the raw value after the key
+
+
+def pending_release_lines(root: Path) -> "list[PendingLink]":
+    """Every `pending-release:` field the ledger holds.
+
+    `active.md` is read whole; a `complete/` record only above its
+    `## Original prompt` boundary (the same head `_record_fields` reads), and
+    `complete/archive/` not at all — exactly what the dashboard renders."""
+    out: "list[PendingLink]" = []
+    files: "list[Path]" = []
+    if (root / "active.md").is_file():
+        files.append(root / "active.md")
+    complete = root / "complete"
+    archive = complete / "archive"
+    if complete.is_dir():
+        files += [f for f in sorted(complete.rglob("*.md"))
+                  if archive not in f.parents and f.name != "index.md"]
+    for f in files:
+        is_record = f.name != "active.md"
+        slug = f.stem
+        for i, line in enumerate(f.read_text(errors="replace").splitlines(), 1):
+            if is_record and re.match(r"^##\s+Original prompt\s*$", line, re.I):
+                break
+            h = H2_RE.match(line)
+            if h:
+                slug = _slugify_h2(h.group(1))
+                continue
+            m = FIELD_RE.match(line)
+            if m and m.group(1).strip() == "pending-release":
+                out.append(PendingLink(_rel(root, f), i, slug,
+                                       m.group(2).strip()))
+    return out
+
+
+def parse_pending_value(value: str, published=None):
+    """`(repo, owner, number, url)` for a well-formed value, else a reason str."""
+    published = PUBLISHED_REPOS if published is None else published
+    m = PENDING_RELEASE_RE.match(value)
+    if not m:
+        return ("not `<repo>@https://github.com/<owner>/<repo>/pull/<n>` "
+                "(one link per line, no placeholder such as `none`)")
+    lib, owner, repo, num = m.groups()
+    if lib != repo:
+        return f"names {lib} but links a {repo} PR"
+    if lib not in published:
+        return (f"{lib} is not in the published set "
+                f"({', '.join(published)}) — no release can ever clear it")
+    url = value.split("@", 1)[1]
+    return (lib, owner, int(num), url)
+
+
+def pending_release_format_findings(root: Path,
+                                    published=None) -> "list[Finding]":
+    """Malformed or unpublishable `pending-release:` lines — drift.
+
+    Unlike staleness this is an error: a link that names an unpublished repo,
+    or a placeholder like `none — workspace task`, is not "not released yet",
+    it is a line that can never be cleared."""
+    problems: "list[Finding]" = []
+    for link in pending_release_lines(root):
+        parsed = parse_pending_value(link.value, published)
+        if isinstance(parsed, tuple):
+            continue
+        where = f"{link.path}:{link.lineno}"
+        msg = (f"{where}: `pending-release: {link.value}` — {parsed} "
+               f"(REFERENCE.md \"The pending-release chain\")")
+        if link.path == "active.md":
+            problems.append(Finding(msg, (), (("active.md", link.slug),)))
+        else:
+            problems.append(Finding(msg, (link.path,)))
+    return problems
+
+
+# -- the network half (opt-in): which links does a release contain? ---------- #
+def _gh(args: "list[str]") -> "tuple[int, str, str]":
+    import subprocess
+    try:
+        r = subprocess.run(["gh", *args], capture_output=True, text=True)
+    except FileNotFoundError:
+        return 127, "", "gh not installed"
+    return r.returncode, r.stdout, r.stderr
+
+
+def resolve_release_version(version: str, owner: str = PUBLISHED_OWNER) -> str:
+    """`latest` -> the tag of the latest GitHub release; anything else as given.
+
+    The published tag is the bare version (`2026.10.4.1`); the GitHub release
+    is named `v<version>`, so a leading `v` is dropped either way."""
+    if version != "latest":
+        return version[1:] if version.startswith("v") else version
+    code, out, err = _gh(["api", f"repos/{owner}/{RELEASE_VERSION_REPO}/"
+                          "releases/latest", "--jq", ".tag_name"])
+    if code != 0 or not out.strip():
+        raise RuntimeError(f"cannot resolve the latest release: {err.strip()}")
+    tag = out.strip()
+    return tag[1:] if tag.startswith("v") else tag
+
+
+def gh_pr_contained(owner: str, repo: str, number: int, tag: str) -> "bool | None":
+    """True when the PR's merge commit is in `tag`; False when it is not (or
+    the PR never merged); None when GitHub could not say.
+
+    Containment, not dates: `compare/<tag>...<sha>` reports `behind` (or
+    `identical`) exactly when the merge commit is an ancestor of the tag — the
+    same question as `git merge-base --is-ancestor`, with no clone needed."""
+    code, out, _ = _gh(["api", f"repos/{owner}/{repo}/pulls/{number}",
+                        "--jq", '[.merged_at // "", .merge_commit_sha // ""] | @tsv'])
+    if code != 0:
+        return None
+    merged_at, _, sha = out.strip().partition("\t")
+    if not merged_at or not sha:
+        return False
+    code, out, _ = _gh(["api", f"repos/{owner}/{repo}/compare/{tag}...{sha}",
+                        "--jq", ".status"])
+    if code != 0:
+        return None
+    return out.strip() in ("behind", "identical")
+
+
+def gh_labelled_merged(owner: str, repo: str) -> "list[int]":
+    """Merged PRs in `repo` still carrying the `pending-release` label."""
+    code, out, _ = _gh(["pr", "list", "--repo", f"{owner}/{repo}",
+                        "--label", "pending-release", "--state", "merged",
+                        "--limit", "500", "--json", "number",
+                        "--jq", ".[].number"])
+    if code != 0:
+        return []
+    return [int(x) for x in out.split()]
+
+
+class ReleasePlan(NamedTuple):
+    version: str
+    released: "list[PendingLink]"          # Mind lines to delete
+    gates: "list[tuple[str, int, str]]"    # (path, lineno, lib) release-gate lines to delete
+    labels: "list[tuple[str, str, int]]"   # (owner, repo, number) labels to drop
+    unknown: "list[str]"                   # links GitHub could not answer for
+
+
+def plan_clear_released(root: Path, version: str, *, contained=None,
+                        labelled=None, published=None,
+                        owner: str = PUBLISHED_OWNER) -> ReleasePlan:
+    """What a published `version` clears: Mind lines, release-gates, labels.
+
+    `contained(owner, repo, number, tag)` and `labelled(owner, repo)` default
+    to the GitHub calls above and are injectable so the logic is testable
+    offline. A malformed or unpublishable line is NOT planned for deletion
+    here — `check` reports it; this verb only clears what a release cleared."""
+    contained = gh_pr_contained if contained is None else contained
+    labelled = gh_labelled_merged if labelled is None else labelled
+    published = PUBLISHED_REPOS if published is None else published
+    cache: "dict[tuple[str, str, int], bool | None]" = {}
+
+    def _is_in(o: str, repo: str, num: int):
+        key = (o, repo, num)
+        if key not in cache:
+            cache[key] = contained(o, repo, num, version)
+        return cache[key]
+
+    released: "list[PendingLink]" = []
+    unknown: "list[str]" = []
+    labels: "list[tuple[str, str, int]]" = []
+    for link in pending_release_lines(root):
+        parsed = parse_pending_value(link.value, published)
+        if not isinstance(parsed, tuple):
+            continue
+        lib, o, num, url = parsed
+        state = _is_in(o, lib, num)
+        if state is None:
+            unknown.append(url)
+        elif state:
+            released.append(link)
+            if (o, lib, num) not in labels:
+                labels.append((o, lib, num))
+    for repo in published:
+        for num in labelled(owner, repo):
+            if (owner, repo, num) in labels:
+                continue
+            if _is_in(owner, repo, num):
+                labels.append((owner, repo, num))
+
+    # A `release-gate: <lib>` on a complete/ record exists for the record's own
+    # pending links; once none of that library's remain, the gate is spent.
+    gates: "list[tuple[str, int, str]]" = []
+    by_path: "dict[str, list[PendingLink]]" = {}
+    for link in pending_release_lines(root):
+        by_path.setdefault(link.path, []).append(link)
+    gone = {(l.path, l.lineno) for l in released}
+    for path, links in by_path.items():
+        if path == "active.md":
+            continue
+        remaining = set()
+        for l in links:
+            if (l.path, l.lineno) in gone:
+                continue
+            p = parse_pending_value(l.value, published)
+            remaining.add(p[0] if isinstance(p, tuple)
+                          else l.value.split("@", 1)[0])
+        if not any((l.path, l.lineno) in gone for l in links):
+            continue
+        for i, line in enumerate((root / path).read_text(
+                errors="replace").splitlines(), 1):
+            m = FIELD_RE.match(line)
+            if m and m.group(1).strip() == "release-gate":
+                lib = m.group(2).strip().strip("`")
+                if lib not in remaining:
+                    gates.append((path, i, lib))
+    return ReleasePlan(version, released, gates, labels, unknown)
+
+
+def apply_release_plan(root: Path, plan: ReleasePlan) -> "list[str]":
+    """Delete the planned lines in place; returns the files touched."""
+    drop: "dict[str, set[int]]" = {}
+    for l in plan.released:
+        drop.setdefault(l.path, set()).add(l.lineno)
+    for path, lineno, _ in plan.gates:
+        drop.setdefault(path, set()).add(lineno)
+    for path, numbers in drop.items():
+        f = root / path
+        text = f.read_text()
+        lines = text.split("\n")
+        kept = [ln for i, ln in enumerate(lines, 1) if i not in numbers]
+        f.write_text("\n".join(kept))
+    return sorted(drop)
+
+
+def release_plan_warnings(plan: ReleasePlan) -> "list[Finding]":
+    """The plan as `check --network` warnings: lines a release already cleared."""
+    return [Finding(
+        f"{l.path}:{l.lineno}: `pending-release: {l.value}` is contained in "
+        f"release {plan.version} — run `lifecycle.py clear-released --version "
+        f"{plan.version} --apply`", (l.path,))
+        for l in plan.released]
+
+
+def _regenerate_dashboard(root: Path) -> bool:
+    """Run the Brain's dashboard generator against THIS Mind checkout."""
+    import os
+    import shutil
+    import subprocess
+    candidates = []
+    if os.environ.get("PYAUTO_BRAIN"):
+        candidates.append(Path(os.environ["PYAUTO_BRAIN"]) / "bin" / "pyauto-brain")
+    candidates.append(root.parent / "PyAutoBrain" / "bin" / "pyauto-brain")
+    exe = next((str(c) for c in candidates if c.is_file()), None) \
+        or shutil.which("pyauto-brain")
+    if not exe:
+        return False
+    env = dict(os.environ, PYAUTO_MIND=str(root))
+    r = subprocess.run([exe, "intake", "--apply", "dashboard"], env=env,
+                       cwd=str(root))
+    return r.returncode == 0
+
+
+def cmd_clear_released(args) -> int:
+    """The /review_release step-6 sweep as one verb (dry run by default)."""
+    root = ROOT
+    try:
+        version = resolve_release_version(args.version)
+    except RuntimeError as e:
+        print(f"clear-released: {e}", file=sys.stderr)
+        return 2
+    plan = plan_clear_released(root, version)
+    print(f"clear-released: release {version}")
+    print(f"  Mind lines contained in the release: {len(plan.released)}")
+    for l in plan.released:
+        print(f"    - {l.path}:{l.lineno}  {l.value}")
+    print(f"  spent release-gate lines: {len(plan.gates)}")
+    for path, lineno, lib in plan.gates:
+        print(f"    - {path}:{lineno}  release-gate: {lib}")
+    for url in plan.unknown:
+        print(f"  ? GitHub could not say whether {url} is released — left in place")
+    cmds = [["gh", "pr", "edit", str(n), "--repo", f"{o}/{r}",
+             "--remove-label", "pending-release"] for o, r, n in plan.labels]
+    print(f"  labels to drop: {len(cmds)}")
+    if args.apply:
+        touched = apply_release_plan(root, plan)
+        print(f"  wrote {len(touched)} file(s)")
+        if touched and not args.no_dashboard:
+            if _regenerate_dashboard(root):
+                print("  dashboard regenerated")
+            else:
+                print("  ! dashboard NOT regenerated — run "
+                      "`pyauto-brain intake --apply dashboard`")
+    if args.remove_labels:
+        failed = 0
+        for c in cmds:
+            code, _, err = _gh(c[1:])
+            if code != 0:
+                failed += 1
+                print(f"  ! {' '.join(c)}: {err.strip()}")
+        print(f"  labels dropped: {len(cmds) - failed}/{len(cmds)}")
+        if failed:
+            return 1
+    else:
+        for c in cmds:
+            print("    " + " ".join(c))
+    if not args.apply:
+        print("  (dry run — pass --apply to delete the Mind lines, "
+              "--remove-labels to drop the GitHub labels)")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# the batch records
+#
+# `batches/<date>-<slot>.md` is the ledger of one unattended shift — the same
+# genre as `complete/`, and the evidence base the review-minute budget is
+# calibrated from (`batches/AGENTS.md`). Nothing checked it. The 2026-08-31-pm
+# record cites a member prompt at a path that had already been deleted, and its
+# `review-minutes-actual:` reads `(not given)` — "the only calibration there
+# is", missing, in the only real dev slot ever run.
+#
+# Only the member GRAMMAR is checked here: `  - <slug>: <path> — <tier> —
+# <minutes> — <outcome>`, and only where the path field looks like a prompt
+# path at all. A member with a sentence where the path goes (a hand submission,
+# a science wave) is not this grammar and is not drift — the batch conductor
+# reports those as notes and so does this.
+# --------------------------------------------------------------------------- #
+BATCH_MEMBER_RE = re.compile(r"^  - (?P<slug>[^:]+): (?P<rest>.+)$")
+
+#: A member path worth resolving: a real prompt path, not a sentence.
+BATCH_PATH_RE = re.compile(r"^[\w./-]+\.md$")
+
+#: A record is CLOSED once its review has landed — `review:` names the file,
+#: `reviewed-at:` says when they sat down. Either is enough.
+BATCH_CLOSED_KEYS = ("review", "reviewed-at")
+
+
+def batch_records(root: Path) -> "list[Path]":
+    """The dispatch records themselves — not the packets or the reviews, which
+    live in their own folders and have their own shapes."""
+    batches = root / "batches"
+    if not batches.is_dir():
+        return []
+    return sorted(f for f in batches.glob("*.md") if f.name != "AGENTS.md")
+
+
+def batch_members(path: Path) -> "list[tuple[str, str]]":
+    """[(slug, prompt path)] for the member lines that carry a prompt path."""
+    out: "list[tuple[str, str]]" = []
+    inside = False
+    for line in path.read_text(errors="replace").splitlines():
+        if FIELD_RE.match(line):
+            inside = line.strip().startswith("- members:")
+            continue
+        if not inside:
+            continue
+        m = BATCH_MEMBER_RE.match(line)
+        if not m:
+            continue
+        fields = [f.strip() for f in m.group("rest").split(" — ", 3)]
+        if len(fields) != 4 or not BATCH_PATH_RE.match(fields[0]):
+            continue
+        out.append((m.group("slug").strip(), fields[0]))
+    return out
+
+
+def _prompt_ever_existed(root: Path, rel: str) -> bool:
+    """Has this path ever been in the repo?
+
+    A member prompt is written under `draft/`, issued into `active/` and then
+    ABSORBED into its completion record, which is filed under the task's name —
+    so eight of the nine 2026-08-31-pm members name a path that resolves
+    nowhere on disk and is not drift. Git is the only thing that can tell that
+    apart from a path nobody ever wrote. Where there is no git (a bare template
+    checkout, a tarball) this answers False and the disk is the whole test."""
+    return bool(_git(root, ["log", "--oneline", "-1", "--", rel]))
+
+
+def unresolved_batch_members(root: Path) -> "list[tuple[Path, str, str]]":
+    """(record, slug, path) for members whose prompt is in no state folder.
+
+    Not yet drift: a prompt absorbed into its completion record is gone from
+    every folder and is nobody's mistake. `batch_member_problems` decides."""
+    out: "list[tuple[Path, str, str]]" = []
+    for record in batch_records(root):
+        for slug, rel in batch_members(record):
+            if (root / rel).exists():
+                continue
+            name = Path(rel).name
+            if (root / "active" / name).exists():
+                continue
+            if next(iter(sorted((root / "complete").glob(f"**/{name}"))), None):
+                continue
+            out.append((record, slug, rel))
+    return out
+
+
+def batch_member_problems(root: Path) -> "list[str]":
+    """Batch members whose prompt path resolves nowhere and never did.
+
+    Silent in a SHALLOW clone, which cannot answer the question: CI checks out
+    at depth 1 and `git log -- <path>` there reports nothing for every prompt
+    written before the boundary — all seven absorbed 2026-08-31-pm members read
+    as fabricated. `batch_member_notes` says so once instead of failing seven
+    times on a measurement the checkout cannot make."""
+    return [f.msg for f in batch_member_findings(root)]
+
+
+def batch_member_findings(root: Path) -> "list[Finding]":
+    """The same drift, attributed to the batch record and the cited prompt."""
+    if _shallow_boundary(root) is not None:
+        return []
+    return [
+        Finding(
+            f"{record.relative_to(root)}: member `{slug}` cites `{rel}`, which is "
+            f"in no state folder and has never been in this repo — the member's "
+            f"question and witness cannot be read",
+            (_rel(root, record), rel),
+        )
+        for record, slug, rel in unresolved_batch_members(root)
+        if not _prompt_ever_existed(root, rel)
+    ]
+
+
+def batch_member_notes(root: Path) -> "list[str]":
+    """The one line a shallow checkout can honestly say about the above."""
+    return [f.msg for f in batch_member_notes_findings(root)]
+
+
+def batch_member_notes_findings(root: Path) -> "list[Finding]":
+    """A fact about the CHECKOUT, not about any path — so it carries none, and
+    `--paths` keeps it in scope wherever it is run."""
+    if _shallow_boundary(root) is None:
+        return []
+    rows = unresolved_batch_members(root)
+    if not rows:
+        return []
+    return [Finding(
+        f"{len(rows)} batch member prompt(s) resolve in no state folder and "
+        f"could not be checked against history — this is a shallow clone "
+        f"(checkout with fetch-depth: 0 to verify them)")]
+
+
+def batch_record_warnings(root: Path) -> "list[str]":
+    """Closed batch records with no measured review cost.
+
+    A warning, not drift: the number is the human's to write after the fact,
+    and a record is not wrong for being written before they did. But
+    `batches/AGENTS.md` calls `review-minutes-actual:` "the only calibration
+    there is" — without it the review-minute budget every batch is planned
+    against never improves."""
+    return [f.msg for f in batch_record_warning_findings(root)]
+
+
+def batch_record_warning_findings(root: Path) -> "list[Finding]":
+    """The same warnings, attributed to the batch record they are about."""
+    warnings: "list[Finding]" = []
+    for record in batch_records(root):
+        fields = _record_fields(record)
+        if not any(fields.get(k) for k in BATCH_CLOSED_KEYS):
+            continue
+        actual = [v for v in fields.get("review-minutes-actual", [])
+                  if v and v != "(not given)"]
+        if actual:
+            continue
+        warnings.append(Finding(
+            f"{record.relative_to(root)}: the review has landed but "
+            f"`review-minutes-actual:` is empty — the only calibration the "
+            f"review-minute budget has (batches/AGENTS.md)",
+            (_rel(root, record),)))
+    return warnings
+
+
 def draft_issue_refs(root: Path) -> "list[tuple[str, str]]":
     """(draft_path, issue_url) for draft prompts citing a GitHub issue.
 
@@ -1145,6 +2037,169 @@ def cmd_orphans(args) -> int:
     return 1
 
 
+
+# --------------------------------------------------------------------------- #
+# epics — retire shipped entries out of epics.md
+#
+# epics.md is a live board: the dashboard renders every entry under "Epics"
+# with a resume prompt. Nothing ever took an entry off it, so a programme that
+# had shipped months ago still invited a session to continue it. An entry whose
+# `status:` OPENS with SHIPPED or COMPLETE is done (a status that merely
+# MENTIONS a shipped phase — "phase 2 SHIPPED; phase 3 open" — is not), and its
+# text is preserved under complete/archive/epics/ rather than deleted.
+# --------------------------------------------------------------------------- #
+# Anchored, deliberately: the whole point is that a status naming one shipped
+# phase mid-sentence does not retire a still-running epic.
+DONE_STATUS_RE = re.compile(r"^(shipped|complete)", re.IGNORECASE)
+
+
+def epic_blocks(path: Path) -> "tuple[list[str], list[tuple[str, list[str]]]]":
+    """(header lines, [(slug, block lines)]) for epics.md, verbatim.
+
+    A block runs from its `## <slug>` heading to the line before the next `##`
+    (or EOF); everything before the first heading is the file's header."""
+    if not path.exists():
+        return [], []
+    header: "list[str]" = []
+    blocks: "list[tuple[str, list[str]]]" = []
+    slug: "str | None" = None
+    cur: "list[str]" = []
+    for line in path.read_text(errors="replace").splitlines():
+        m = H2_RE.match(line)
+        if m:
+            if slug is not None:
+                blocks.append((slug, cur))
+            slug, cur = _slugify_h2(m.group(1)), [line]
+            continue
+        (cur if slug is not None else header).append(line)
+    if slug is not None:
+        blocks.append((slug, cur))
+    return header, blocks
+
+
+def epic_fields(block: "list[str]") -> "dict[str, str]":
+    """`- key: value` fields of one epic block; first occurrence of a key wins."""
+    fields: "dict[str, str]" = {}
+    for line in block[1:]:
+        f = FIELD_RE.match(line)
+        if f:
+            fields.setdefault(f.group(1).strip(), f.group(2).strip())
+    return fields
+
+
+def epic_is_done(fields: "dict[str, str]") -> bool:
+    """True when `status:` OPENS with SHIPPED or COMPLETE (prefix, not search)."""
+    return bool(DONE_STATUS_RE.match(fields.get("status", "").strip()))
+
+
+def _git_ok(root: Path, args: "list[str]") -> bool:
+    """True when `git <args>` succeeds. `_git` cannot say: it returns [] both
+    for a failure and for a command with no output (`git mv`)."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "-C", str(root), *args],
+                             capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return out.returncode == 0
+
+
+def _epic_archive_dest(root: Path, slug: str, fields: "dict[str, str]") -> "tuple[Path, Path | None]":
+    """(archive file the entry text is appended to, ledger file to move | None).
+
+    A ledger still under `draft/` or `active/` follows its epic into
+    `complete/archive/epics/`; one already archived there is left alone and
+    receives the text; anything else (a dated `complete/YYYY/MM/` record, a file
+    in another repo) is not ours to move, so the text lands in `<slug>.md`."""
+    archive_dir = root / "complete" / "archive" / "epics"
+    raw = fields.get("ledger", "").strip()
+    if raw and not raw.startswith(("http://", "https://")):
+        rel = raw.split("#", 1)[0].strip()
+        cand = (root / rel)
+        try:
+            inside = cand.resolve().relative_to(root.resolve())
+        except ValueError:
+            inside = None
+        if inside is not None:
+            if inside.parts[:1] in (("draft",), ("active",)) and cand.is_file():
+                return archive_dir / cand.name, cand
+            if str(inside.parent).replace("\\", "/") == "complete/archive/epics":
+                return archive_dir / cand.name, None
+    return archive_dir / f"{safe_name(slug)}.md", None
+
+
+def _append_retired(dest: Path, title: str, block: "list[str]", day: str) -> None:
+    """Append one epics.md entry verbatim under a dated retirement heading."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    body = "\n".join(block).rstrip("\n")
+    if dest.exists():
+        existing = dest.read_text(errors="replace")
+        if existing and not existing.endswith("\n"):
+            existing += "\n"
+    else:
+        existing = f"# {title}\n"
+    dest.write_text(f"{existing}\n## Retired from epics.md ({day})\n\n{body}\n")
+
+
+def retire_epics(root: Path, apply: bool = False,
+                 day: "str | None" = None) -> "list[dict]":
+    """Report (or, with apply, perform) the retirement of every done entry."""
+    import datetime
+    if day is None:
+        day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    path = root / "epics.md"
+    header, blocks = epic_blocks(path)
+    done: "list[dict]" = []
+    keep: "list[tuple[str, list[str]]]" = []
+    for slug, block in blocks:
+        fields = epic_fields(block)
+        if not epic_is_done(fields):
+            keep.append((slug, block))
+            continue
+        dest, move = _epic_archive_dest(root, slug, fields)
+        done.append({
+            "slug": slug,
+            "ledger": fields.get("ledger", "").strip() or "(no ledger)",
+            "archive": str(dest.relative_to(root)),
+            "title": fields.get("title", "").strip() or slug,
+            "move": move,
+            "block": block,
+        })
+    if not apply or not done:
+        return done
+
+    for item in done:
+        dest = root / item["archive"]
+        move = item["move"]
+        if move is not None:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            src_rel = str(move.relative_to(root))
+            dst_rel = str(dest.relative_to(root))
+            if not (_git_ok(root, ["ls-files", "--error-unmatch", "--", src_rel])
+                    and _git_ok(root, ["mv", src_rel, dst_rel])):
+                move.replace(dest)
+        _append_retired(dest, item["title"], item["block"], day)
+
+    out = list(header)
+    for _, block in keep:
+        out.extend(block)
+    path.write_text("\n".join(out).rstrip("\n") + "\n")
+    return done
+
+
+def cmd_epics(args) -> int:
+    done = retire_epics(ROOT, apply=args.retire)
+    if not done:
+        print("epics: nothing to retire")
+        return 0
+    for item in done:
+        if args.retire:
+            print(f"retired {item['slug']}: ledger -> {item['archive']}")
+        else:
+            print(f"{item['slug']} \u2014 {item['ledger']}")
+    return 0
+
+
 def _prune_ledger_section(path: Path, slug: str) -> bool:
     """Drop the `## <slug>` H2 section (heading through the line before the
     next H2, or EOF) from a ledger file. Returns True if a section was removed."""
@@ -1259,21 +2314,25 @@ def cmd_record(args) -> int:
 
     dest = complete_bucket(date) / f"{safe_name(args.slug)}.md"
     body = src.read_text(errors="replace").rstrip() + "\n"
-    # fold the original active/ prompt (explicit --prompt, else guess from slug)
-    prompt = None
-    if args.prompt:
-        p = ACTIVE_DIR / args.prompt
-        if p.exists():
-            prompt = p
+    # fold the original prompt. `close` hands the resolved file over as
+    # `prompt_path` (it serves draft/ prompts too, which --prompt cannot reach);
+    # the CLI keeps its own active/-only resolution: explicit --prompt bare
+    # filename, else a guess from the slug.
+    prompt = getattr(args, "prompt_path", None)
     if prompt is None:
-        guess = ACTIVE_DIR / f"{safe_name(args.slug).replace('-', '_')}.md"
-        if guess.exists():
-            prompt = guess
+        if args.prompt:
+            p = ACTIVE_DIR / args.prompt
+            if p.exists():
+                prompt = p
+        if prompt is None:
+            guess = ACTIVE_DIR / f"{safe_name(args.slug).replace('-', '_')}.md"
+            if guess.exists():
+                prompt = guess
     if prompt is not None:
         body += "\n## Original prompt\n\n" + prompt.read_text(errors="replace")
 
     print(f"record: {dest.relative_to(ROOT)}"
-          + (f"  (+folds active/{prompt.name})" if prompt else ""))
+          + (f"  (+folds {_rel(ROOT, prompt)})" if prompt else ""))
     slug_in_active_md = safe_name(args.slug) in {
         safe_name(s) for s in ledger_slugs(ACTIVE_MD)
     }
@@ -1284,14 +2343,25 @@ def cmd_record(args) -> int:
         return 0
     import subprocess
 
+    # `close` passes stage=False: it leaves the index alone and the caller
+    # stages what it changed (plain filesystem ops, nothing git-visible).
+    stage = getattr(args, "stage", True)
+
+    def _stage(path: Path) -> None:
+        if stage:
+            subprocess.run(["git", "-C", str(ROOT), "add", str(path)],
+                           capture_output=True, text=True)
+
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(body)
-    subprocess.run(["git", "-C", str(ROOT), "add", str(dest)],
-                   capture_output=True, text=True)
+    _stage(dest)
     if prompt is not None:
-        r = subprocess.run(["git", "-C", str(ROOT), "rm", "-q", str(prompt)],
-                           capture_output=True, text=True)
-        if r.returncode != 0:
+        removed = False
+        if stage:
+            r = subprocess.run(["git", "-C", str(ROOT), "rm", "-q", str(prompt)],
+                               capture_output=True, text=True)
+            removed = r.returncode == 0
+        if not removed:
             prompt.unlink(missing_ok=True)
 
     # Freshen complete/index.md in the same step so a shipped record never
@@ -1300,8 +2370,7 @@ def cmd_record(args) -> int:
     # was easy to forget (failing runs + maintainer emails). Same effect as
     # cmd_index --apply, folded in so the two can't drift apart.
     INDEX_MD.write_text(_render_index(_existing_curated()))
-    subprocess.run(["git", "-C", str(ROOT), "add", str(INDEX_MD)],
-                   capture_output=True, text=True)
+    _stage(INDEX_MD)
     print(f"index: refreshed {INDEX_MD.relative_to(ROOT)} "
           f"({len(_all_records())} records)")
 
@@ -1310,8 +2379,7 @@ def cmd_record(args) -> int:
     # push to main while a shipped slug lingers there, and the manual registry
     # edit in the ship skills was easy to forget (2026-07-30 email storm).
     if _prune_ledger_section(ACTIVE_MD, args.slug):
-        subprocess.run(["git", "-C", str(ROOT), "add", str(ACTIVE_MD)],
-                       capture_output=True, text=True)
+        _stage(ACTIVE_MD)
         print(f"active.md: removed shipped section {safe_name(args.slug)!r}")
     return 0
 
@@ -1465,46 +2533,523 @@ def cmd_dates(args) -> int:
     return 1 if args.check else 0
 
 
-def cmd_check(args) -> int:
-    problems: "list[str]" = []
+def check_findings(root: Path) -> "tuple[list[Finding], list[Finding]]":
+    """(problems, warnings) for the whole tree, each attributed to its paths.
+
+    Split out of `cmd_check` so `--paths` has something to grade: the printing
+    and the exit code are the command's, the rules are here."""
+    problems: "list[Finding]" = []
     a_slugs = {safe_name(s) for s in ledger_slugs(ACTIVE_MD)}
     rec_by_slug: "dict[str, Path]" = {}
     for _, slug, path in _all_records():
         rec_by_slug.setdefault(safe_name(slug), path)
 
     for s in sorted(a_slugs & set(rec_by_slug)):
-        problems.append(
+        rec = rec_by_slug[s]
+        problems.append(Finding(
             f"active.md slug has a complete/ record (finished but still "
-            f"active?): {s} -> {rec_by_slug[s].relative_to(ROOT)}"
-        )
+            f"active?): {s} -> {rec.relative_to(ROOT)}",
+            (_rel(root, rec),), (("active.md", s),)))
 
     # a file should not exist in two state dirs at once
     if ACTIVE_DIR.exists() and COMPLETE_DIR.exists():
-        active_names = {f.name for f in ACTIVE_DIR.glob("*.md")}
+        active_by_name = {f.name: f for f in ACTIVE_DIR.glob("*.md")}
         for f in COMPLETE_DIR.rglob("*.md"):
             if ARCHIVE_DIR in f.parents:
                 continue
-            if f.name in active_names:
-                problems.append(f"file in both active/ and complete/: {f.name}")
+            if f.name in active_by_name:
+                problems.append(Finding(
+                    f"file in both active/ and complete/: {f.name}",
+                    (_rel(root, active_by_name[f.name]), _rel(root, f))))
 
-    problems.extend(registry_problems(ROOT))
+    problems.extend(registry_findings(root))
     problems.extend(
-        f"active/ prompt no registry entry claims: {f.relative_to(ROOT)}"
-        for f in orphan_prompts(ROOT)
+        Finding(f"active/ prompt no registry entry claims: {f.relative_to(ROOT)}",
+                (_rel(root, f),))
+        for f in orphan_prompts(root)
     )
     problems.extend(
-        f"active/ stray the lifecycle tooling cannot see (retire, or re-home "
-        f"to a state folder): {f.relative_to(ROOT)}"
-        for f in active_strays(ROOT)
+        Finding(f"active/ stray the lifecycle tooling cannot see (retire, or "
+                f"re-home to a state folder): {f.relative_to(ROOT)}",
+                (_rel(root, f),))
+        for f in active_strays(root)
     )
+
+    # A row that declares its PRs are open and names none contradicts itself,
+    # so it is drift like the rest. An uncleared `pending-release:` does not:
+    # the key MEANS "not released yet", and a library can legitimately sit
+    # unreleased for weeks — reported, exit code untouched.
+    problems.extend(pr_key_findings(root))
+    # A `pending-release:` line that is malformed, a placeholder, or names a
+    # repo outside PUBLISHED_REPOS is different: no release can ever clear it.
+    problems.extend(pending_release_format_findings(root))
+    warnings: "list[Finding]" = list(pending_release_findings(root))
+
+    # The batch ledger, on the same footing: a member citing a prompt that
+    # never existed is drift (the record is wrong about what it dispatched); a
+    # closed record with no measured review cost is a warning (the number is
+    # the human's to write, and its absence costs the budget, not the ledger).
+    problems.extend(batch_member_findings(root))
+    warnings.extend(batch_member_notes_findings(root))
+    warnings.extend(batch_record_warning_findings(root))
+    return problems, warnings
+
+
+def cmd_check(args) -> int:
+    """Report drift; exit 1 on any of it that is IN SCOPE.
+
+    `args` may be None (a library call) — every flag is read defensively so the
+    repo-wide behaviour is exactly what it was before `--paths` existed."""
+    root = ROOT
+    wanted = scope_paths(root, getattr(args, "paths", None))
+    base = getattr(args, "base", None)
+
+    problems, warnings = check_findings(root)
+    # Opt-in network leg: links a published release already contains. Off by
+    # default so the offline CI check stays offline.
+    network = getattr(args, "network", None)
+    if network:
+        try:
+            plan = plan_clear_released(root, resolve_release_version(network))
+            warnings.extend(release_plan_warnings(plan))
+        except RuntimeError as e:
+            warnings.append(Finding(f"--network: {e}"))
+    problems, out_problems = scope_findings(root, problems, wanted, base)
+    warnings, out_warnings = scope_findings(root, warnings, wanted, base)
+
+    scope = f" (scoped to {len(wanted)} path(s))" if wanted else ""
+
+    def _out_of_scope() -> None:
+        for f in out_problems + out_warnings:
+            print(f"  ~ out of scope: {f.msg}")
 
     if problems:
-        print("lifecycle check: DRIFT")
-        for p in problems:
-            print(f"  - {p}")
+        print(f"lifecycle check: DRIFT{scope}")
+        for f in problems:
+            print(f"  - {f.msg}")
+        for f in warnings:
+            print(f"  ! warning: {f.msg}")
+        _out_of_scope()
         return 1
-    print("lifecycle check: OK")
+    if warnings:
+        print(f"lifecycle check: OK{scope} ({len(warnings)} warning(s))")
+        for f in warnings:
+            print(f"  ! warning: {f.msg}")
+        _out_of_scope()
+        return 0
+    print(f"lifecycle check: OK{scope}")
+    _out_of_scope()
     return 0
+
+
+# --------------------------------------------------------------------------- #
+# the tier-`glance` shadow window (autonomy_log.md)
+# --------------------------------------------------------------------------- #
+def _md_cells(line: str) -> "list[str]":
+    """The cells of one markdown table row, honouring escaped pipes.
+
+    Rows in this ledger quote shell and Python (`\\|delta\\|`), so a plain
+    `split("|")` invents columns. Splitting on an unescaped pipe is the whole
+    difference between "six cells" and "eight cells" on those rows.
+    """
+    body = line.strip()
+    if body.startswith("|"):
+        body = body[1:]
+    if body.endswith("|") and not body.endswith("\\|"):
+        body = body[:-1]
+    return [c.strip() for c in re.split(r"(?<!\\)\|", body)]
+
+
+def shadow_section(text: str) -> "tuple[int, int]":
+    """[start, end) line indices of the shadow-window section, or ValueError."""
+    lines = text.splitlines()
+    start = None
+    for i, ln in enumerate(lines):
+        if ln.startswith(SHADOW_HEADING):
+            start = i
+            break
+    if start is None:
+        raise ValueError(f"no {SHADOW_HEADING!r} heading in the ledger")
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if lines[j].startswith("## "):
+            end = j
+            break
+    return start, end
+
+
+def shadow_table(text: str) -> "tuple[int, int]":
+    """(header line index, index one past the last data row) of the shadow table."""
+    lines = text.splitlines()
+    start, end = shadow_section(text)
+    header = None
+    for i in range(start, end):
+        if lines[i].startswith(SHADOW_TABLE_HEADER):
+            header = i
+            break
+    if header is None:
+        raise ValueError(
+            f"no row starting {SHADOW_TABLE_HEADER!r} under {SHADOW_HEADING!r}")
+    last = header + 2  # header + separator
+    while last < end and lines[last].startswith("|"):
+        last += 1
+    return header, last
+
+
+def shadow_rows(text: str) -> "list[list[str]]":
+    """Every data row of the shadow table, as cell lists."""
+    header, last = shadow_table(text)
+    lines = text.splitlines()
+    return [_md_cells(ln) for ln in lines[header + 2:last]]
+
+
+def shadow_count_line(rows: "list[list[str]]") -> str:
+    """The section's one-line state of the window, derived from the rows.
+
+    Only tier-`glance` stage-1 and stage-2 rows dated from the re-scope count:
+    the window's own rule forbids pooling the two stages, legacy rows carry
+    neither (they predate the stage column's meaning), and every earlier row
+    belongs to the tier-`notify` window that closed when `notify` was granted
+    on 2026-10-02. They all stay listed — deleting history to make a counter
+    tidy is how a pre-registered rule stops being pre-registered — and are
+    named as uncounted so the number cannot be read as "the table has N rows".
+    """
+    graded = [r for r in rows if shadow_counts(r)]
+    uncounted = len(rows) - len(graded)
+    one = sum(1 for r in graded if r[5] == "1")
+    two = sum(1 for r in graded if r[5] == "2")
+    firsts = sorted(r[0] for r in graded)
+    first = firsts[0] if firsts else "none yet"
+    line = (f"{SHADOW_COUNT_PREFIX} {len(graded)} (stage 1: {one}, stage 2: "
+            f"{two}) — window re-scoped to tier `{SHADOW_TIER}` "
+            f"{SHADOW_REOPENED}; first `{SHADOW_TIER}` row: {first}")
+    if uncounted:
+        line += (f"; earlier rows not counted (the tier-`notify` window, "
+                 f"closed {SHADOW_REOPENED}, and legacy): {uncounted}")
+    return line
+
+
+def shadow_counts(row: "list[str]") -> bool:
+    """Whether one table row counts toward the current window."""
+    return (len(row) > 5 and row[5] in SHADOW_STAGES
+            and row[2] == SHADOW_TIER and row[0] >= SHADOW_REOPENED)
+
+
+def _shadow_cell(value: str) -> str:
+    """A pipe inside a cell silently splits the row — trade it for a slash."""
+    return " ".join(str(value).replace("|", "/").split())
+
+
+def shadow_apply(text: str, row: str) -> str:
+    """Append `row` under the shadow table and rewrite the count line."""
+    lines = text.splitlines()
+    header, last = shadow_table(text)
+    lines.insert(last, row)
+
+    rows = shadow_rows("\n".join(lines))
+    count = shadow_count_line(rows)
+
+    start, end = shadow_section("\n".join(lines))
+    for i in range(start, end):
+        if lines[i].startswith(SHADOW_COUNT_PREFIX):
+            lines[i] = count
+            break
+    else:
+        for i in range(start, end):
+            if lines[i].startswith(SHADOW_COUNT_ANCHOR):
+                lines.insert(i, "")
+                lines.insert(i, count)
+                break
+        else:
+            raise ValueError(
+                f"no {SHADOW_COUNT_PREFIX!r} line and no "
+                f"{SHADOW_COUNT_ANCHOR!r} paragraph to anchor it to")
+    return "\n".join(lines) + "\n"
+
+
+def cmd_shadow_row(args) -> int:
+    """Append one tier-`glance` row to the shadow window (the close-out hook).
+
+    Dry-run by default: the row and the count line it would produce are printed
+    and nothing is written, because the caller is a skill reading a number back
+    to a human before committing to it.
+    """
+    log = Path(args.log) if args.log else AUTONOMY_LOG
+    if not log.is_file():
+        print(f"shadow-row: no ledger at {log}", file=sys.stderr)
+        return 2
+    text = log.read_text(encoding="utf-8")
+
+    date = args.date or _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
+    row = "| " + " | ".join(_shadow_cell(c) for c in (
+        date, args.task, args.tier, args.gate, args.action, args.stage)) + " |"
+
+    try:
+        updated = shadow_apply(text, row)
+    except ValueError as exc:
+        print(f"shadow-row: {exc}", file=sys.stderr)
+        return 2
+
+    count = shadow_count_line(shadow_rows(updated))
+    print(row)
+    print(count)
+    if not args.apply:
+        print("shadow-row: dry run — nothing written (use --apply)")
+        return 0
+    log.write_text(updated, encoding="utf-8")
+    print(f"shadow-row: appended to {log}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# close — the Mind side of the close-out, as one verb
+#
+# Shipping a task ends with six chores in a fixed order, and `/prm` spends its
+# prose telling a session to do each one: write the record, remove the prompt,
+# drop the registry entry, append the tier-`glance` shadow row, regenerate
+# complete/index.md, repoint what the merge falsified. Every one of them was a
+# step a session could skip — two of them (the index and the `active.md` prune)
+# were folded into `record` after exactly that, each following its own
+# drift-alarm email storm. `close` is the composition of the rest: it CALLS the
+# existing verbs, it does not reimplement them.
+#
+# Two things it deliberately does not do. It never rewrites a reference — it
+# prints them under "repoint these", because which ones the merge falsified is
+# a judgement. And it never renders the dashboard: the state is the Mind's and
+# the renderer is the Brain's, so `main` heals the render
+# (dashboard_refresh.yml) and the command to force it is printed as the
+# optional next step.
+#
+# It also touches nothing in git: the record is written and the prompt removed
+# with plain filesystem ops, and nothing is staged. Stage what it changed
+# yourself, in the one commit the close-out makes.
+# --------------------------------------------------------------------------- #
+#: Where a closed task may still be named — /prm's step-4 sweep, minus the
+#: registries `close` prunes itself.
+CLOSE_GREP_TARGETS = ("draft", "active", "epics.md", "planned.md", "parked.md")
+CLOSE_REF_LIMIT = 30
+DASHBOARD_NEXT = "pyauto-brain intake --apply dashboard"
+
+
+def close_prompt(root: Path, slug: str,
+                 explicit: "str | None" = None) -> "tuple[Path | None, str]":
+    """(the task's prompt file, how it was found), else (None, "").
+
+    `record --prompt` resolves under active/ ONLY and no-ops in silence when it
+    misses — the documented trap that leaves a record with no `## Original
+    prompt` and an orphan behind. This looks everywhere the task can actually
+    be: active/, the registries' own `prompt:` paths, and draft/ (a task may
+    ship straight off a draft, which `record` cannot fold at all)."""
+    if explicit:
+        for cand in (root / explicit, root / "active" / explicit):
+            if cand.is_file():
+                return cand, "--prompt"
+        for state in ("draft", "active"):
+            d = root / state
+            if d.is_dir():
+                for f in sorted(d.rglob("*.md")):
+                    if f.name == Path(explicit).name:
+                        return f, "--prompt"
+        return None, ""
+
+    want = safe_name(slug)
+    names = {want + ".md", want.replace("-", "_") + ".md"}
+    active = root / "active"
+    for name in sorted(names):
+        if (active / name).is_file():
+            return active / name, "active/"
+
+    for reg in REGISTRY_FILES:
+        for entry, fields in registry_entries(root / reg):
+            if safe_name(entry) != want:
+                continue
+            raw = fields.get("prompt")
+            if not raw:
+                continue
+            resolved, state = resolve_prompt(root, raw.split()[0])
+            if resolved is not None and state in ("draft", "active"):
+                return resolved, f"{reg} `prompt:`"
+
+    draft = root / "draft"
+    if draft.is_dir():
+        for f in sorted(draft.rglob("*.md")):
+            if f.name in names:
+                return f, "draft/"
+    return None, ""
+
+
+def close_registries(root: Path, slug: str) -> "list[str]":
+    """The registry files still carrying a `## <slug>` section for this task."""
+    want = safe_name(slug)
+    return [reg for reg in REGISTRY_FILES
+            if want in {safe_name(s) for s in ledger_slugs(root / reg)}]
+
+
+def close_references(root: Path, slug: str, rel: str) -> "list[str]":
+    """`<file>:<line>: <text>` for every remaining mention of the closed task.
+
+    This is /prm's sweep: a `blocked-by:` the merge cleared, an epic phase now
+    done, a `superseded-by:` chain that now ends in a record. Reported for a
+    human to repoint — never rewritten here, because only the session that read
+    the diff knows which mentions the merge actually falsified."""
+    name = Path(rel).name
+    needles = {n for n in (rel, name, Path(name).stem, safe_name(slug), slug)
+               if len(n) > 3}
+    hits: "list[str]" = []
+    for target in CLOSE_GREP_TARGETS:
+        path = root / target
+        if path.is_dir():
+            files = sorted(path.rglob("*.md"))
+        elif path.is_file():
+            files = [path]
+        else:
+            continue
+        for f in files:
+            if _rel(root, f) == rel:
+                continue
+            try:
+                text = f.read_text(errors="replace")
+            except OSError:
+                continue
+            for i, line in enumerate(text.splitlines(), 1):
+                if any(n in line for n in needles):
+                    hits.append(f"{_rel(root, f)}:{i}: {line.strip()[:120]}")
+    return hits
+
+
+def close_shadow_task(args) -> "tuple[str | None, str]":
+    """(the shadow row's task cell, why there is no row).
+
+    The tier-`glance` auto-merge confirmation is counted over 20 rows and the
+    close-out is what feeds the window — but only for tier `glance`, and only
+    with the gate that actually ran and the action that actually happened (an
+    auto-merge records `merged-unchanged` at merge; the human amends the row
+    if they later find something substantive). Neither is ever inferred here:
+    a missing cell yields no row and a line saying so."""
+    if getattr(args, "no_shadow_row", False):
+        return None, "suppressed (--no-shadow-row)"
+    tier = (getattr(args, "tier", None) or "").strip().lower()
+    if not tier:
+        return None, (f"skipped — no --tier given (pass `--tier {SHADOW_TIER}` "
+                      "with --gate/--action to feed the shadow window)")
+    if tier != SHADOW_TIER:
+        return None, f"skipped — tier `{tier}` is not `{SHADOW_TIER}`"
+    if not (args.gate and args.action):
+        return None, (f"tier {SHADOW_TIER}, but --gate/--action are missing — "
+                      "the row records the gate that RAN and what happened to "
+                      "the PR, and neither is ever invented; run "
+                      "`lifecycle.py shadow-row … --apply` once you have them")
+    task = args.slug
+    if getattr(args, "pr", None):
+        task += " (" + " / ".join(args.pr) + ")"
+    return task, ""
+
+
+def cmd_close(args) -> int:
+    """Run the Mind-side close-out for one shipped task."""
+    root = ROOT
+    slug = safe_name(args.slug)
+
+    date = _parse_date(args.date)
+    if date is None:
+        print(f"lifecycle close: bad --date {args.date!r}", file=sys.stderr)
+        return 1
+    body = Path(args.from_file)
+    if not body.is_file():
+        print(f"lifecycle close: --from-file not found: {body}", file=sys.stderr)
+        return 1
+
+    # refusal 1 — the record is already written. Re-running `close` would
+    # overwrite a completion record from its --from-file body, which is the one
+    # thing in this repo that is not regenerable.
+    existing = [p for _, s, p in _all_records() if safe_name(s) == slug]
+    dest = complete_bucket(date) / f"{slug}.md"
+    if existing or dest.exists():
+        where = existing[0] if existing else dest
+        print(f"lifecycle close: a record for {slug!r} already exists "
+              f"({_rel(root, where)}) — this task is closed out; edit the "
+              f"record by hand, or pass the right slug", file=sys.stderr)
+        return 1
+
+    # refusal 2 — nothing to close out.
+    prompt, how = close_prompt(root, args.slug, args.prompt)
+    if prompt is None:
+        extra = f" (--prompt {args.prompt!r} found nothing)" if args.prompt else ""
+        print(f"lifecycle close: {args.slug!r} resolves to no prompt in "
+              f"active/, draft/ or a registry `prompt:`{extra} — nothing to "
+              f"close out", file=sys.stderr)
+        return 1
+
+    rel = _rel(root, prompt)
+    registries = close_registries(root, args.slug)
+    task_cell, why = close_shadow_task(args)
+    row = None
+    if task_cell is not None:
+        row = "| " + " | ".join(_shadow_cell(c) for c in (
+            args.date, task_cell, SHADOW_TIER, args.gate, args.action,
+            args.stage)) + " |"
+
+    print(f"close: {args.slug}")
+    print(f"  record:   {dest.relative_to(root)}  (folds {rel}, found via {how})")
+    print(f"  remove:   {rel}")
+    for reg in registries:
+        print(f"  registry: {reg} — drop the `## {slug}` entry")
+    if not registries:
+        print("  registry: no entry in "
+              + "/".join(REGISTRY_FILES) + " — nothing to drop")
+    print(f"  index:    {INDEX_MD.relative_to(root)} — regenerated")
+    print(f"  shadow:   {row}" if row else f"  shadow:   {why}")
+
+    if not args.apply:
+        print("  (dry run; nothing written — pass --apply)")
+        _close_tail(root, args, rel)
+        return 0
+
+    rec = _CloseArgs(slug=args.slug, date=args.date, from_file=args.from_file,
+                     prompt=None, prompt_path=prompt, apply=True, stage=False)
+    rc = cmd_record(rec)
+    if rc != 0:
+        return rc
+    # `record` prunes active.md; the pointers a task may also hold elsewhere
+    # are this verb's to drop.
+    for reg in registries:
+        if reg == "active.md":
+            continue
+        if _prune_ledger_section(root / reg, args.slug):
+            print(f"{reg}: removed section {slug!r}")
+
+    if row is not None:
+        sh = _CloseArgs(log=getattr(args, "log", None), date=args.date,
+                        task=task_cell, tier=SHADOW_TIER, gate=args.gate,
+                        action=args.action, stage=args.stage, apply=True)
+        cmd_shadow_row(sh)
+
+    _close_tail(root, args, rel)
+    return 0
+
+
+class _CloseArgs:
+    """A stand-in argparse namespace for the verbs `close` composes."""
+
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def _close_tail(root: Path, args, rel: str) -> None:
+    """What `close` will not do for you: repoint the references, render the page."""
+    refs = close_references(root, args.slug, rel)
+    if refs:
+        print(f"\nrepoint these — {len(refs)} remaining reference(s) to the "
+              f"closed task (never rewritten here):")
+        for line in refs[:CLOSE_REF_LIMIT]:
+            print(f"  - {line}")
+        if len(refs) > CLOSE_REF_LIMIT:
+            print(f"  … and {len(refs) - CLOSE_REF_LIMIT} more")
+    print(f"\nnext (optional): {DASHBOARD_NEXT}")
+    print("  close does not render the dashboard — the renderer is the Brain's "
+          "and `main` heals the render (dashboard_refresh.yml).")
+    print("  Nothing is staged: `git add -A` what you just changed, then "
+          "`lifecycle.py check --paths …` before you push.")
 
 
 def main() -> int:
@@ -1526,13 +3071,121 @@ def main() -> int:
     r.add_argument("--apply", action="store_true")
     r.set_defaults(func=cmd_record)
 
+    cl = sub.add_parser(
+        "close",
+        help="the Mind-side close-out for one shipped task, as one verb: "
+             "record + remove the prompt + drop the registry entry + index "
+             "(+ the tier-`glance` shadow row)",
+    )
+    cl.add_argument("slug", help="the task slug being closed out")
+    cl.add_argument("--date", required=True, help="completion date YYYY-MM-DD")
+    cl.add_argument("--from-file", required=True, dest="from_file",
+                    help="the rich completion body (the record's text above "
+                         "`## Original prompt`)")
+    cl.add_argument("--prompt",
+                    help="the prompt file, when the slug does not name it: a "
+                         "repo-relative path OR a bare filename (unlike "
+                         "`record --prompt`, draft/ prompts resolve too)")
+    cl.add_argument("--pr", nargs="+", action="extend", default=[],
+                    metavar="REF",
+                    help="the PR(s) this task shipped (`Repo#N`), named in the "
+                         "shadow row's task cell")
+    cl.add_argument("--tier", help="the task's declared Consequence tier; "
+                                   "only `glance` feeds the shadow window")
+    cl.add_argument("--gate", help="with --tier glance: the gate cell copied "
+                                   "from the task's ship calibration row")
+    cl.add_argument("--action", choices=list(SHADOW_ACTIONS),
+                    help="with --tier glance: what happened to the PR "
+                         "(`merged-unchanged` at an auto-merge)")
+    cl.add_argument("--stage", default="1", choices=list(SHADOW_STAGES),
+                    help="the shadow row's protocol stage (default: 1)")
+    cl.add_argument("--no-shadow-row", action="store_true", dest="no_shadow_row",
+                    help="never append a shadow row, whatever the tier")
+    cl.add_argument("--log", help="path to autonomy_log.md (default: this repo's)")
+    cl.add_argument("--apply", action="store_true",
+                    help="do it (default: dry run — print every step and write "
+                         "nothing)")
+    cl.set_defaults(func=cmd_close)
+
+    sr = sub.add_parser(
+        "shadow-row",
+        help="append one tier-`glance` row to the shadow window in "
+             "autonomy_log.md (the /prm close-out hook)",
+    )
+    sr.add_argument("--date", help="merge date YYYY-MM-DD (default: today, UTC)")
+    sr.add_argument("--task", required=True,
+                    help="task slug plus the PR refs, e.g. "
+                         "'my-task (PyAutoBrain#1 / PR#2)'")
+    sr.add_argument("--tier", default=SHADOW_TIER,
+                    help=f"the declared Consequence tier (default: "
+                         f"{SHADOW_TIER})")
+    sr.add_argument("--gate", required=True,
+                    help="the gate cell, copied from the task's ship "
+                         "calibration row (tests/smoke/review/heart/witness"
+                         "[/adversary])")
+    sr.add_argument("--action", required=True, choices=list(SHADOW_ACTIONS),
+                    help="what happened to the PR")
+    sr.add_argument("--stage", default="1", choices=list(SHADOW_STAGES),
+                    help="1 = four-leg gate + witness; 2 = plus the "
+                         "independent-model adversary leg")
+    sr.add_argument("--apply", action="store_true",
+                    help="write the row (default: dry run)")
+    sr.add_argument("--log", help="path to autonomy_log.md (default: this repo's)")
+    sr.set_defaults(func=cmd_shadow_row)
+
     ix = sub.add_parser("index", help="generate complete/index.md (token-light archive navigation)")
     ix.add_argument("--apply", action="store_true", help="write complete/index.md")
     ix.add_argument("--check", action="store_true", help="fail if index.md is stale (CI)")
     ix.set_defaults(func=cmd_index)
 
-    c = sub.add_parser("check", help="drift guard (non-zero exit on drift)")
+    c = sub.add_parser(
+        "check",
+        help="drift guard (non-zero exit on drift); --paths scopes it to one "
+             "branch's diff",
+    )
+    c.add_argument(
+        "--paths", nargs="+", action="extend", default=[], metavar="PATH",
+        help="grade only the findings ABOUT these repo-relative paths "
+             "(repeatable, or space-separated; a directory covers what is "
+             "under it). Everything else is printed as `~ out of scope` and "
+             "leaves the exit code alone — this is what lets a ledger branch "
+             "be held to its own diff. Without it, nothing changes.",
+    )
+    c.add_argument(
+        "--base", metavar="REF",
+        help="with --paths: when a registry file (active.md/planned.md/"
+             "parked.md) is itself listed, count only the entries this ref's "
+             "diff touched. Without it, a listed registry file puts ALL its "
+             "entries in scope.",
+    )
+    c.add_argument(
+        "--network", nargs="?", const="latest", metavar="VERSION",
+        help="also ask GitHub (gh) which `pending-release:` links a published "
+             "release already contains, and warn on each (default VERSION: "
+             "latest). Off by default: the check stays offline.",
+    )
     c.set_defaults(func=cmd_check)
+
+    cr = sub.add_parser(
+        "clear-released",
+        help="after a live release: drop the `pending-release:` lines (and "
+             "spent `release-gate:` lines) whose PR the release tag contains, "
+             "regenerate the dashboard, and drop the GitHub labels "
+             "(/review_release step 6; dry run by default)",
+    )
+    cr.add_argument("--version", required=True,
+                    help="the published version / tag, e.g. 2026.10.4.1, or "
+                         "`latest`")
+    cr.add_argument("--apply", action="store_true",
+                    help="delete the Mind lines and regenerate the dashboard "
+                         "(default: dry run)")
+    cr.add_argument("--remove-labels", action="store_true",
+                    dest="remove_labels",
+                    help="run the `gh pr edit --remove-label pending-release` "
+                         "calls (a GitHub write; default: print them)")
+    cr.add_argument("--no-dashboard", action="store_true", dest="no_dashboard",
+                    help="with --apply: skip the dashboard regeneration")
+    cr.set_defaults(func=cmd_clear_released)
 
     d = sub.add_parser(
         "dates",
@@ -1556,6 +3209,15 @@ def main() -> int:
 
     o = sub.add_parser("orphans", help="report active/ prompts no registry claims")
     o.set_defaults(func=cmd_orphans)
+
+    e = sub.add_parser(
+        "epics",
+        help="report (or --retire) epics.md entries whose status is SHIPPED/COMPLETE",
+    )
+    e.add_argument("--retire", action="store_true",
+                   help="archive the entry text (and a draft/active ledger) and "
+                        "delete the entry from epics.md")
+    e.set_defaults(func=cmd_epics)
 
     args = p.parse_args()
     return args.func(args)

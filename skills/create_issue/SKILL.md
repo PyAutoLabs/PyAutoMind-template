@@ -5,19 +5,17 @@ description: Convert a PyAutoMind prompt file into a GitHub issue and register i
 
 Turn a `PyAutoMind/` prompt into a tracked GitHub issue and register it.
 
-A **PyAutoMind** primitive — it owns the mechanical **issue + registry write**:
-assemble the issue body, create the issue, register the task in `active.md`, move
-the prompt to `active/`, and push Mind state. The *reasoning* (classify repos,
-explore code, generate the plan) belongs to **PyAutoBrain**:
+> **Which GitHub surface are you on?** This skill spells its GitHub steps as
+> `gh` commands, which name the *operation*, not necessarily the command: a
+> Claude Code remote session has no `gh` and reaches GitHub through the
+> `mcp__github__*` tools instead. Probe once (`command -v gh`) and translate
+> via `PyAutoBrain/skills/GITHUB_ACCESS.md`. Do not install `gh` to close the
+> gap — that page records why an installed one still fails.
 
-- **Called by Brain.** `$start-dev` (`/start_dev` in Claude) does the triage/planning via the
-  Feature Agent and then **delegates the issue write to this skill**, passing the
-  primary repo, title, plan and suggested branch. Brain does not re-implement
-  issue creation.
-- **Runnable standalone.** You can run `$create-issue` (`/create_issue` in Claude) by itself when you just
-  want an issue from a prompt without full triage or worktree routing — it does a
-  *light* pass to fill any inputs the caller didn't supply. For deep
-  classification + dev-environment setup, use `$start-dev` instead.
+Mind owns the issue/registry write, prompt lifecycle move and push. Brain owns
+classification and planning. When called by start-dev, use its supplied repo,
+title, plan and branch verbatim; standalone, fill missing inputs with a light
+pass. Deep triage and environment setup still go through start-dev.
 
 Organ boundary and the execution-environment model: PyAutoBrain `skills/WORKFLOW.md`.
 
@@ -27,10 +25,20 @@ Organ boundary and the execution-environment model: PyAutoBrain `skills/WORKFLOW
 $create-issue <prompt-file-path>    # /create_issue in Claude
 ```
 
-Path relative to `PyAutoMind/`. Prompts live under `<work-type>/<target>/` (see
-README "Prompt taxonomy"); pre-migration `<target>/<name>.md` paths still resolve.
-Examples: `bug/autofit/factor_graph_instance_iteration.md`,
-`feature/autoarray/oversampling.md`.
+Pass a path relative to the Mind checkout. Prompts live under
+`draft/<work-type>/<target>/` (see REFERENCE.md "Prompt taxonomy");
+pre-migration `<target>/<name>.md` paths still resolve. Examples:
+`draft/bug/autofit/factor_graph_instance_iteration.md` and
+`draft/feature/autoarray/oversampling.md`. The skill argument stays Mind-relative
+in grouped and flat layouts. Use `PYAUTO_MIND` when the checkout is elsewhere.
+
+From either workspace root, resolve the checkout once for the shell examples
+below (an existing `PYAUTO_MIND` override takes precedence):
+
+```bash
+brain_dir="${PYAUTO_BRAIN:-$(test -d organs/PyAutoBrain && echo organs/PyAutoBrain || echo PyAutoBrain)}"
+export PYAUTO_MIND="${PYAUTO_MIND:-$(python3 "$brain_dir/agents/_repo_paths.py" path PyAutoMind --root .)}"
+```
 
 ## Inputs
 
@@ -44,7 +52,7 @@ These come from the **caller** (Brain/`$start-dev`) when delegated, or from a
 | plan (high + detailed) | caller | brief plan from a quick read of the prompt + referenced files |
 | suggested branch | caller (`plan_branches`) | `feature/<short-desc>` kebab-case, <50 chars |
 
-Resolve repository owners from `PyAutoMind/repos.yaml`; the generated summary
+Resolve repository owners from `$PYAUTO_MIND/repos.yaml`; the generated summary
 in `WORKFLOW.md` is the readable mapping. Do not reuse legacy owner defaults.
 
 ## Steps
@@ -52,13 +60,18 @@ in `WORKFLOW.md` is the readable mapping. Do not reuse legacy owner defaults.
 ### 0. Sync new prompt ideas (Mind)
 
 ```bash
-source PyAutoMind/scripts/prompt_sync.sh
+source "$PYAUTO_MIND/scripts/prompt_sync.sh"
 prompt_sync_new_prompts          # no-op if nothing untracked; else commits + pushes new ideas
 ```
 
 ### 1. Read the prompt
 
-Read `PyAutoMind/<argument>`. If missing, report and list prompts in that folder.
+Read `<Mind checkout>/<argument>`. Resolve the checkout with `PYAUTO_MIND` when
+set; otherwise use the existing Brain repository resolver for the active
+workspace layout. If given an absolute path or a workspace-relative prefix
+(`organs/PyAutoMind/` or `PyAutoMind/`), strip that resolved checkout prefix
+exactly once; never prepend Mind twice. If missing, report and list prompts
+in that folder.
 
 ### 2. Resolve the inputs
 
@@ -67,6 +80,16 @@ do the light standalone pass from the Inputs table (don't run a full Brain
 triage — that's `$start-dev`).
 
 ### 3. Assemble + create the issue
+
+**User-facing reports never become repo issues.** If the input is a question,
+idea or bug report from a user or collaborator (or an agent acting for one)
+rather than a Mind lifecycle task, stop here: draft the Discussion (title,
+category, body) and hand it to the human, per `policy/where_to_file.md`. The
+maintainer may later file a Mind prompt for it; that prompt comes back here.
+
+**If the prompt body carries an `Issue:` line, reuse that issue — skip creation** (a
+Cortex-spawned gate ref, filed with its issue already open; see REFERENCE.md "A
+Cortex-spawned dev follow-up gets its issue at filing"). Never open a second.
 
 Build the body in this structure, then create it (present for review first):
 
@@ -114,7 +137,7 @@ ISSUE_EOF
 
 ### 4. Register the task in active.md (Mind)
 
-Add the task entry to `PyAutoMind/active.md` with the issue URL and today's
+Add the task entry to `$PYAUTO_MIND/active.md` with the issue URL and today's
 date (schema in [REFERENCE.md](../../REFERENCE.md) → "`active.md` schema"):
 
 ```markdown
@@ -139,8 +162,8 @@ flight) — the second of the three lifecycle states (`draft/ → active/ →
 complete/`; issue #71). Use `git mv` to preserve history:
 
 ```bash
-mkdir -p PyAutoMind/active
-git -C PyAutoMind mv <draft-path> active/<filename>
+mkdir -p "$PYAUTO_MIND/active"
+git -C "$PYAUTO_MIND" mv <draft-path> active/<filename>
 ```
 
 The `mkdir -p` matters on a **freshly-spawned** Mind, where `active/` does not
@@ -158,13 +181,13 @@ Issued: <YYYY-MM-DD>
 Confirm both landed before pushing:
 
 ```bash
-python3 PyAutoMind/scripts/lifecycle.py dates    # OK when nothing is undated
+python3 "$PYAUTO_MIND/scripts/lifecycle.py" dates    # OK when nothing is undated
 ```
 
 ### 6. Push Mind
 
 ```bash
-source PyAutoMind/scripts/prompt_sync.sh
+source "$PYAUTO_MIND/scripts/prompt_sync.sh"
 prompt_sync_push "prompt: file issue for <task-name> (#<issue>)"
 ```
 
@@ -173,6 +196,8 @@ If step 0 already pushed, this carries only the active.md + `active/` changes.
 ## Notes
 
 - Always present the issue body for review before creating it.
-- If `gh auth status` fails, tell the user to run `! gh auth login`.
+- On the `gh` surface, if `gh auth status` fails, tell the user to run
+  `! gh auth login`. On the MCP surface there is nothing to log into —
+  create the issue with `issue_write` and carry on.
 - The detailed plan should be thorough enough that a fresh session could start
   from the issue alone.
