@@ -56,8 +56,16 @@ OWNER_PLACEHOLDER = "YOURORG"
 EXIT_CLEAN, EXIT_DRIFT, EXIT_UNSAFE, EXIT_CRASH = 0, 1, 2, 3
 
 MIND_WORK_TYPES = (
-    "feature", "bug", "refactor", "docs", "test", "release",
-    "maintenance", "research", "human_review", "triage",
+    "feature",
+    "bug",
+    "refactor",
+    "docs",
+    "test",
+    "release",
+    "maintenance",
+    "research",
+    "human_review",
+    "triage",
 )
 
 MIND_RULES = [
@@ -66,8 +74,11 @@ MIND_RULES = [
     # already keeps tests/). The privacy test must travel with the generator it
     # guards, or a spawned org can reintroduce the rule-5 leak (#118) silently.
     ("tests/*", "KEEP"),
-    ("REFERENCE.md", "KEEP"), ("AGENTS.md", "KEEP"), ("CLAUDE.md", "KEEP"),
-    ("LICENSE", "KEEP"), ("ROUTING.md", "KEEP"),
+    ("REFERENCE.md", "KEEP"),
+    ("AGENTS.md", "KEEP"),
+    ("CLAUDE.md", "KEEP"),
+    ("LICENSE", "KEEP"),
+    ("ROUTING.md", "KEEP"),
     (".gitignore", "KEEP"),
     # merge driver for the append-only autonomy_log.md, which the template
     # carries (5b) — the attribute travels with the file it governs.
@@ -80,18 +91,23 @@ MIND_RULES = [
     # template spawned for somebody else's org. They live under .github/ (the
     # 2026-08 root declutter, #248) — GitHub resolves community-health files
     # there, and the Mind's root stays the task ledger.
-    ("AI_POLICY.md", "KEEP_SUB"), ("CONTRIBUTING.md", "KEEP_SUB"),
+    ("AI_POLICY.md", "KEEP_SUB"),
+    ("CONTRIBUTING.md", "KEEP_SUB"),
     ("repos.yaml", "SPECIAL:body_map"),
-    ("active.md", "EMPTY"), ("planned.md", "EMPTY"), ("epics.md", "EMPTY"),
-    ("bundles.md", "EMPTY"),
-    # `themes.md` is the `Themes:` vocabulary the dashboard groups bundles on.
+    ("active.md", "EMPTY"),
+    ("planned.md", "EMPTY"),
+    ("epics.md", "EMPTY"),
+    # `themes.md` is the vocabulary for optional topical metadata.
     # EMPTY rather than KEEP: the keyword list is this org's science and
     # tooling domains ("mge", "cti", "docs-hub"), so shipping it verbatim would
     # stamp our subject matter into somebody else's fresh-slate Mind. An empty
     # vocabulary simply disables the unknown-keyword warning until they write
     # their own (see PyAutoBrain `parse_themes`).
     ("themes.md", "EMPTY"),
-    ("parked.md", "EMPTY"), ("condemned.md", "EMPTY"), ("ideas.md", "EMPTY"), ("queue.md", "EMPTY"),
+    ("parked.md", "EMPTY"),
+    ("condemned.md", "EMPTY"),
+    ("ideas.md", "EMPTY"),
+    ("queue.md", "EMPTY"),
     ("autonomy_log.md", "SPECIAL:autonomy_log"),
     # Prompt-file lifecycle (issue #71): draft/ (not-started) -> active/
     # (in-flight) -> complete/YYYY/MM (shipped). A fresh template ships an empty
@@ -102,8 +118,11 @@ MIND_RULES = [
     # says how to write one is template content. Same split, same first-match
     # ordering, same reason.
     ("draft/*", "SKELETON"),
-    ("complete/AGENTS.md", "KEEP"), ("batches/AGENTS.md", "KEEP"),
-    ("active/*", "DROP"), ("complete/*", "DROP"), ("batches/*", "DROP"),
+    ("complete/AGENTS.md", "KEEP"),
+    ("batches/AGENTS.md", "KEEP"),
+    ("active/*", "DROP"),
+    ("complete/*", "DROP"),
+    ("batches/*", "DROP"),
     ("docs/*", "DROP"),
     # `dashboard.md` is EMPTY rather than DROP: README.md ships verbatim and
     # links it, so dropping it would hand every spawned org a broken
@@ -126,7 +145,12 @@ MIND_RULES = [
     # and partitions, moved out of the unversioned root AGENTS.md
     # (PyAutoMind#482). The rest of policy/ is org-agnostic safety text.
     ("policy/hpc_ral.md", "DROP"),
-    ("skills/*", "KEEP"), ("policy/*", "KEEP"),
+    # `policy/github_tokens.md` is instance-specific for the same reason: it
+    # names this org's App (pyautolabs-bot), its secrets and the repos that
+    # consume them. A fresh org writes its own inventory.
+    ("policy/github_tokens.md", "DROP"),
+    ("skills/*", "KEEP"),
+    ("policy/*", "KEEP"),
     # .github is decided PER FILE by the spec's fresh-repo invariant (rule 9):
     # a shipped workflow must succeed on a freshly-spawned repo with no secrets
     # and no sibling repos. Owner substitution alone does NOT achieve that —
@@ -135,11 +159,12 @@ MIND_RULES = [
     # found`. Anything cloning or querying a sibling repo is broken on arrival.
     #
     # Ordered before the .github/scripts DROP and each other; first match wins.
-    (".github/workflows/lifecycle_drift.yml", "KEEP"),          # 9a: self-contained
+    (".github/workflows/lifecycle_drift.yml", "KEEP"),  # 9a: self-contained
     # 9b: DROP (revised in #125). The self-heal makes this workflow depend on
-    # secrets.PAT_PYAUTOLABS and on published *-template repos; a fresh org has
-    # neither, so every path in it is unrunnable there and the secret reference
-    # alone breaks rule 9's no-configured-secret condition.
+    # the org App credential (vars.APP_CLIENT_ID / secrets.APP_PRIVATE_KEY) and
+    # on published *-template repos; a fresh org has neither, so every path in
+    # it is unrunnable there and the secret reference alone breaks rule 9's
+    # no-configured-secret condition.
     (".github/workflows/spawn_drift.yml", "DROP"),
     # 9c — instance automation: sibling repo lists, organ-specific workflow
     # names, org secrets, strong-lensing vocabulary. Every one of the 13 failing
@@ -157,7 +182,7 @@ MIND_RULES = [
     (".github/workflows/morning_health.yml", "DROP"),
     (".github/workflows/arxiv_papers.yml", "DROP"),
     # rule 9c, same as its sibling above: scheduled, needs the papers
-    # webhook-less cross-repo PAT, and pushes to another org repo.
+    # webhook-less cross-repo App token, and pushes to another org repo.
     (".github/workflows/arxiv_interests.yml", "DROP"),
     # 9c also: the tenant-firewall gate checks out three sibling organ repos by
     # name (PyAutoBrain/PyAutoHeart/PyAutoHands). A fresh org has none of them,
@@ -165,9 +190,10 @@ MIND_RULES = [
     # the same failure mode as dashboard_refresh.yml.
     (".github/workflows/firewall_gate.yml", "DROP"),
     # 9c also: the SessionStart-hook propagator. It clones every sibling repo
-    # in the manifest with secrets.PAT_PYAUTOLABS and pushes bot commits into
-    # them by name — firewall_gate.yml's org-coupled shape, multiplied by
-    # thirty, plus rule 9's no-configured-secret condition. A fresh org has no
+    # in the manifest with an org App token (vars.APP_CLIENT_ID /
+    # secrets.APP_PRIVATE_KEY) and pushes bot commits into them by name —
+    # firewall_gate.yml's org-coupled shape, multiplied by thirty, plus rule
+    # 9's no-configured-secret condition. A fresh org has no
     # siblings to propagate into and no such secret to do it with.
     (".github/workflows/session_hook_propagate.yml", "DROP"),
     # Same rule 9c: sibling pushes require an org token and an adopted manifest.
@@ -200,7 +226,8 @@ MIND_RULES = [
     # "extend the spec's tables, then mirror here", never classify ad hoc.
     # Agent-discovery symlinks are install artifacts (recreated by the
     # PyAutoBrain installer), not source content — drop them from the template.
-    (".claude/*", "DROP"), (".codex/*", "DROP"),
+    (".claude/*", "DROP"),
+    (".codex/*", "DROP"),
     # Instance branding:
     ("logo.png", "DROP"),
 ]
@@ -212,12 +239,17 @@ MEMORY_RULES = [
     # is instance content (it names sub-wiki pages). read_baseline() treats an
     # absent file as an empty baseline, so a fresh repo starts at zero.
     ("scripts/wikilink_baseline.txt", "DROP"),
-    ("scripts/*", "KEEP"), ("tests/*", "KEEP"),
-    ("Makefile", "KEEP"), ("LICENSE", "KEEP"),
-    ("AGENTS.md", "KEEP"), ("CLAUDE.md", "KEEP"), (".gitignore", "KEEP"),
+    ("scripts/*", "KEEP"),
+    ("tests/*", "KEEP"),
+    ("Makefile", "KEEP"),
+    ("LICENSE", "KEEP"),
+    ("AGENTS.md", "KEEP"),
+    ("CLAUDE.md", "KEEP"),
+    (".gitignore", "KEEP"),
     # Same org-wide pointer docs as MIND_RULES — owner substitution; under
     # .github/ since the 2026-08 root declutter (all five organs match).
-    ("AI_POLICY.md", "KEEP_SUB"), ("CONTRIBUTING.md", "KEEP_SUB"),
+    ("AI_POLICY.md", "KEEP_SUB"),
+    ("CONTRIBUTING.md", "KEEP_SUB"),
     # Spec Memory rule 1c: the Memory's own agent skills are generic organism
     # skills — the same class as MIND_RULES' `skills/*` KEEP (spec Mind rule 8).
     # The canary scan still grades every kept file (PyAutoMind#484).
@@ -254,13 +286,15 @@ MEMORY_RULES = [
     (".github/workflows/queue_sweep.yml", "DROP"),
     # Installed hook copies (propagated by the PyAutoBrain installer / session
     # hook propagation), not source content — same rule as the Mind table.
-    (".claude/*", "DROP"), (".codex/*", "DROP"),
+    (".claude/*", "DROP"),
+    (".codex/*", "DROP"),
     # The shared wiki schema is template content; the sub-wikis are instance
     # content (the generator stamps an empty wiki/example/ instead).
     # The CLAUDE.md KEEPs (here and above) are tolerant leftovers: the pointer
     # files are retired (PyAutoMind#482), so they match nothing once a source
     # repo has dropped its copy, and spawn never generates one.
-    ("wiki/AGENTS.md", "KEEP"), ("wiki/CLAUDE.md", "KEEP"),
+    ("wiki/AGENTS.md", "KEEP"),
+    ("wiki/CLAUDE.md", "KEEP"),
     ("wiki/*", "DROP"),
     # Instance branding:
     ("logo.png", "DROP"),
@@ -283,8 +317,13 @@ MEMORY_RULES = [
 # Dataset names catch leaked science content; person names catch leaked task
 # slugs and prompt lines (the spec's example list names `Nightingale`).
 CANARY_TOKENS = (
-    "slacs", "b1938", "cosmos_web_ring", "smbh_binary", "arctic",
-    "nightingale", "rhayes",
+    "slacs",
+    "b1938",
+    "cosmos_web_ring",
+    "smbh_binary",
+    "arctic",
+    "nightingale",
+    "rhayes",
 )
 
 # Titles for EMPTY-ruled files, keyed by their path RELATIVE TO THE REPO ROOT
@@ -302,7 +341,6 @@ EMPTY_TITLES = {
     "dashboard.md": "# PyAutoMind Dashboard",
     "active.md": "# Active Tasks",
     "epics.md": "# Epics",
-    "bundles.md": "# Bundles",
     "themes.md": "# Themes",
     "planned.md": "# Planned",
     "parked.md": "# Parked tasks",
@@ -558,7 +596,9 @@ print(f"smoke OK: {len(scripts)} script(s)")
 def tracked_files(repo):
     out = subprocess.run(
         ["git", "-C", str(repo), "ls-files"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return [Path(line) for line in out.stdout.splitlines() if line]
 
@@ -566,7 +606,9 @@ def tracked_files(repo):
 def head_sha(repo):
     out = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        capture_output=True, text=True, check=True,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return out.stdout.strip()
 
@@ -656,9 +698,93 @@ def plan_repo(repo, rules):
     return plan, warns
 
 
-def generate_mind(mind_root, out_dir):
+MINIMAL_BODY_MAP = "categories: {}\nrepos: {}\n"
+MINIMAL_AGENTS = """# Local Mind — agent instructions
+
+This Mind holds this instance's task intent and workflow state. Read README.md,
+repos.yaml and the task registries before proposing changes. Resolve this
+checkout explicitly; do not fall back to a parent workspace's or another user's
+Mind. A fresh seed has empty records and no configured repository identities.
+
+## Instance boundaries
+
+- repos.yaml is the canonical identity map. Names and directory suffixes do not
+  establish ownership, access or identity. Ask for missing identity and location
+  choices instead of inventing repositories or copying another instance's map.
+- Project source stays in its owning repositories. Scientist configuration owns
+  project/resource relationships. A connected project needs neither an assistant
+  nor a connected organ; an entry in repos.yaml does not activate an organ.
+- Brain, Memory, science ledgers and other organs are optional connections, not
+  services this seed installs. Use a capability only after verifying its local
+  configuration, availability and applicable instructions. Missing or stale
+  evidence is not a passing result or proof of an uninstalled capability.
+- No community destination is configured by this seed. Ask the owner for the
+  intended destination and permission before sending any external message.
+- Bundled tooling and reference documents are framework material, not evidence
+  of configured services. Check instance policy and actual capabilities before
+  applying remote workflow, repository rollout or release instructions. This
+  local seed installs no hooks, automation, remote access or auto-merge service.
+
+## Task records and workflow
+
+- Read REFERENCE.md on demand for schemas. Unstarted prompts belong under
+  draft/<work-type>/<target>/; issued prompts under active/; completed records
+  under complete/<YYYY>/<MM>/. Preserve existing records when resuming work.
+- Inspect active.md, planned.md and parked.md before claiming a task. Use this
+  Mind's installed skills and scripts/lifecycle.py for lifecycle changes. The
+  read-only local check is `python3 scripts/lifecycle.py check`.
+- Use the configured development workflow when available. One bounded task has
+  one prompt and its own reviewable change. If required workflow capabilities
+  are missing, report the missing step; do not silently use another instance.
+- Present a plan before source edits and retain approvals already given. Merge,
+  publication, access changes and releases require their applicable explicit
+  authorization. Do not provision services or run science merely to connect a
+  project. Keep unknown test counts and unavailable evidence explicit.
+- Dashboards are generated views, not task records; use the configured renderer
+  when available rather than hand-editing generated pages.
+
+## Preserve user state
+
+Never rewrite pushed history or initialize over a tracked repository. Inspect
+git status and fetch before editing a configured remote checkout; preserve
+uncommitted work. Never rerun seed generation over this directory or replace
+records with examples during an upgrade. Keep tmp/ scratch out of commits.
+
+Finish at the requested deliverable. Do not leave timers, subscriptions or
+background agents waiting for review or CI after the session ends.
+"""
+MINIMAL_README = """# Local Mind seed
+
+This is empty user-owned task state, generated from the supported Mind rules.
+No project, assistant or optional organ is assumed. No GitHub workflows, git
+repository, remote service or harness installation has been created.
+
+Read AGENTS.md and REFERENCE.md for record schemas. Populate repos.yaml with
+explicit canonical repository identities and categories for your own checkouts
+before connecting Scientist or invoking Brain workflows. Keep this map and your
+records when updating framework tooling; do not rerun seed generation here.
+AGENTS.md is generated for this local seed; it does not inherit the source
+instance's community routing, optional-organ assumptions or automation policy.
+
+The Scientist starter accepts this map with --repos once you have added the
+Scientist repository identity. See the framework's STARTER.md for its initializer.
+Choose and validate one local harness separately; this seed does not install one.
+Add Memory from its supported template only when you need knowledge storage.
+
+For a fresh chat, ask the assistant to read this README, AGENTS.md, repos.yaml
+and the task registries before proposing setup. Existing projects retain their
+source material. Do not publish, install or create remote resources implicitly.
+
+Local lifecycle tooling is available in scripts/lifecycle.py. An empty Mind can
+check its state with `python3 scripts/lifecycle.py check` from this directory.
+"""
+
+
+def generate_mind(mind_root, out_dir, *, minimal=False):
     plan, warns = plan_repo(mind_root, MIND_RULES)
     for rel, (action, src) in sorted(plan.items()):
+        if minimal and rel.parts[0] == ".github":
+            continue
         dest = out_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         if action == "KEEP":
@@ -670,11 +796,14 @@ def generate_mind(mind_root, out_dir):
         elif action == "SPECIAL:autonomy_log":
             dest.write_text(autonomy_log_body(src))
         elif action == "SPECIAL:body_map":
-            dest.write_text(BODY_MAP_TEMPLATE)
+            dest.write_text(MINIMAL_BODY_MAP if minimal else BODY_MAP_TEMPLATE)
         elif action == "GENERATE:":
             dest.write_text("")
     readme = out_dir / "README.md"
-    if readme.exists():
+    if minimal:
+        readme.write_text(MINIMAL_README)
+        (out_dir / "AGENTS.md").write_text(MINIMAL_AGENTS)
+    elif readme.exists():
         readme.write_text(TEMPLATE_README_BANNER + readme.read_text())
     stamp_complete_index(out_dir)
     return warns
@@ -703,12 +832,14 @@ def stamp_complete_index(out_dir):
     # invocation to date happened to use an absolute path, so it stayed latent.
     out_dir = out_dir.resolve()
     lifecycle = out_dir / "scripts" / "lifecycle.py"
-    if not lifecycle.exists():          # rules changed; nothing to stamp
+    if not lifecycle.exists():  # rules changed; nothing to stamp
         return
     (out_dir / "complete").mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [sys.executable, str(lifecycle), "index", "--apply"],
-        cwd=out_dir, check=True, capture_output=True,
+        cwd=out_dir,
+        check=True,
+        capture_output=True,
     )
 
 
@@ -824,7 +955,11 @@ def stamp_family(root, family_dir):
     reusable-smoke work; the workspace pin stamps the family's own version)."""
     license_text = (bootstrap_checkout(root, "PyAutoMind") / "LICENSE").read_text()
     stamped = []
-    for repo in ("PyAutoProject", "autoproject_workspace", "autoproject_workspace_test"):
+    for repo in (
+        "PyAutoProject",
+        "autoproject_workspace",
+        "autoproject_workspace_test",
+    ):
         rdir = family_dir / repo
         if not rdir.is_dir():
             print(f"stamp-family: skipping {repo} (not checked out under {family_dir})")
@@ -884,7 +1019,9 @@ def report(results):
         print(f"== {name}")
         if warns:
             failed = True
-            print(f"  UNMATCHED ({len(warns)}) — extend the spec's tables, then mirror here:")
+            print(
+                f"  UNMATCHED ({len(warns)}) — extend the spec's tables, then mirror here:"
+            )
             for w in warns:
                 print(f"    ✗ {w}")
         else:
@@ -915,12 +1052,39 @@ def workspace_root(mind_root):
     try:
         from repos_sync import workspace_root as resolve
     except ImportError:
-        return mind_root.parent.parent if mind_root.parent.name == "organs" else mind_root.parent
+        return (
+            mind_root.parent.parent
+            if mind_root.parent.name == "organs"
+            else mind_root.parent
+        )
     return resolve(mind_root)
+
+
+def minimal_mind(mind_root, destination=None):
+    """Validate a local seed before exclusively creating a new destination."""
+    if destination is not None:
+        destination = Path(destination).absolute()
+        if destination.exists() or destination.is_symlink():
+            raise ValueError("minimal Mind destination already exists; preserve and resume its records")
+        if not destination.parent.is_dir():
+            raise ValueError("minimal Mind destination parent must exist")
+    with tempfile.TemporaryDirectory(prefix="mind_seed_") as tmp:
+        staged = Path(tmp)
+        warns = generate_mind(mind_root, staged, minimal=True)
+        if report({"minimal Mind": (warns, canary_scan(staged))}):
+            return EXIT_UNSAFE
+        if destination is None:
+            print("Preview only; use --write NEW_DIRECTORY to retain this local seed")
+        else:
+            # copytree's exclusive mkdir refuses an intervening creation too.
+            shutil.copytree(staged, destination)
+            print(f"written: {destination} (local Mind only)")
+    return EXIT_CLEAN
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--minimal-mind", action="store_true", help="local empty Mind only; new --write destination")
     parser.add_argument("--write", metavar="DIR")
     parser.add_argument("--check", metavar="DIR")
     parser.add_argument("--stamp-family", metavar="DIR")
@@ -928,6 +1092,14 @@ def main():
     args = parser.parse_args()
 
     mind_root = Path(__file__).resolve().parents[1]
+    if args.minimal_mind:
+        if args.check or args.stamp_family or args.root is not None:
+            parser.error("--minimal-mind cannot combine with --check, --stamp-family or --root")
+        try:
+            status = minimal_mind(mind_root, args.write)
+        except (ValueError, OSError) as exc:
+            parser.error(str(exc))
+        sys.exit(status)
     # `--root` still wins; only the default changed (see workspace_root).
     root = args.root or workspace_root(mind_root)
 

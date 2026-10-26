@@ -57,17 +57,19 @@ def test_owner_guidance_is_explicit_and_independent_of_filing_exclusions():
     assert "organism standard" in sync.render_standards_policy(POLICY, {"filing_block": False})
 
 
-def test_manifest_ownership_is_boolean_and_has_thirteen_owners():
+def test_manifest_ownership_is_boolean_and_includes_dna_and_broca():
     _, specs = sync.load_manifest(MIND)
     owners = [spec for spec in specs.values() if spec.get("board_owner")]
-    assert len(owners) == 13
+    assert len(owners) == 15
+    assert specs["PyAutoDNA"]["board_owner"] is True
+    assert specs["PyAutoBroca"]["board_owner"] is True
     assert all(isinstance(spec.get("board_owner", False), bool) for spec in specs.values())
 
 
 def test_mind_owns_an_exact_generated_block():
     text = (MIND / "AGENTS.md").read_text()
     _, specs = sync.load_manifest(MIND)
-    assert sync.extract_block(text, sync.STANDARDS_BEGIN, sync.STANDARDS_END) == sync.render_standards_policy(POLICY, specs[MIND.name])
+    assert sync.extract_block(text, sync.STANDARDS_BEGIN, sync.STANDARDS_END) == sync.render_standards_policy(POLICY, specs["PyAutoMind"])
 
 
 def test_writer_appends_preserving_original_bytes_and_is_idempotent(tmp_path):

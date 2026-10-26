@@ -120,7 +120,7 @@ GITHUB_FILES = {
     ".github/workflows/arxiv_interests.yml": (
         "name: interests\non:\n  schedule:\n    - cron: \"30 2 * * 1-5\"\n"
         "jobs:\n  i:\n    runs-on: ubuntu-latest\n    steps:\n"
-        "      - env:\n          PAT: ${{ secrets.PAT_PYAUTOLABS }}\n"
+        "      - env:\n          APP_KEY: ${{ secrets.APP_PRIVATE_KEY }}\n"
         "        run: echo x\n"
     ),
     ".github/scripts/arxiv_interests.py": "CATEGORIES = ('astro-ph.CO',)\n",
@@ -561,6 +561,14 @@ def test_instance_hpc_policy_page_is_dropped_but_policy_is_kept():
     assert spawn.match_rule(
         Path("policy/end_at_deliverable.md"), spawn.MIND_RULES
     )[1] == "KEEP"
+
+
+def test_instance_github_tokens_policy_page_is_dropped():
+    """`policy/github_tokens.md` names this instance's GitHub App, its secrets
+    and the repos consuming them; it must never ship in a template."""
+    assert spawn.match_rule(
+        Path("policy/github_tokens.md"), spawn.MIND_RULES
+    )[1] == "DROP"
 
 
 def test_memory_skills_are_kept_verbatim(tmp_path):
