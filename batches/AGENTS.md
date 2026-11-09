@@ -155,3 +155,170 @@ wrote here at dispatch. A run classifying a new reason as its sibling's doing on
 its own authority is an autonomous acknowledgement, which the hard invariants
 forbid (`AUTONOMY.md`, "Leg 4 under a batch launch", 2026-08-31 amendment). No
 line, no match, the run parks.
+
+## Shift brief (2026-11-03)
+
+A **shift brief** is a batch record with a `brief:` block. It is the same file in
+the same folder, under the same ledger-merge rules; every key above keeps its
+meaning, `heart-ack:` and `expected-effects:` included. What changes is who
+picks the work: the human writes the brief, and **writing it with `review-at:` is
+the dispatch** (`PyAutoBrain/AUTONOMY.md`, "Shift briefs and unattended
+`glance`" — 2026-11-03). The grant covers the named tasks plus the brief's
+backlog policy, until `review-at:`. The deterministic watcher that starts
+sessions under it is the one exemption to `policy/end_at_deliverable.md`, and
+only while a brief is open (`policy/shift_watcher.md`).
+
+```markdown
+# Batch 2026-11-04 am
+- dispatched: 2026-11-04T08:30Z
+- review-at: 2026-11-04T11:30Z      # stated by the human; the grant expires here
+- shift: morning
+- issue: https://github.com/PyAutoLabs/PyAutoMind/issues/<n>   # the digest is posted here once
+- packet: yes                       # optional; the HTML packet is opt-in under a brief
+- heart-ack:
+  - <reason line>
+- expected-effects:
+  - <member>: <what it may legitimately change>
+- brief:
+  - goals:                          # in order; the first outranks the rest
+    - 1. land the next cluster-strong-lensing slice
+    - 2. clear review-ready glance PRs on PyAutoArray
+  - tasks:                          # named prompt paths, done first, in this order
+    - draft/feature/autolens/<name>.md
+    - draft/bug/autoarray/<name>.md
+  - backlog: scoped                 # none | fill-idle | scoped
+  - scoped:                         # only with backlog: scoped
+    - epics: cluster-strong-lensing, autonomous-orchestrators
+    - tags: jax-gradient
+    - tiers: notify, glance
+  - exclude:
+    - draft/feature/autofit/<name>.md
+    - epics: euclid-dr1
+  - review-minutes: 45
+  - lanes: any local-dev ral         # any subset of: any local-dev ral gpu wsl-data
+  - merge-cap: 3                     # unattended glance merges this shift, at most
+  - token-budget: <n>                # tokens the shift may spend, all sessions
+  - max-workers: 2                   # optional: concurrent workers (default 2)
+  - max-sessions: 6                  # optional: sessions this shift, all told (default 6)
+  - worker-mode: auto                # optional: auto (default) | dontAsk | acceptEdits — never bypassPermissions
+  - sandbox: no                      # optional: yes marks a test shift
+  - shadow: no                       # optional: yes plans and digests, spawns nothing
+  - ral-allowance:                   # only when lanes includes ral; phase 5 consumes it
+    - packets: 2
+    - partition: ral
+    - cpu-hours: 64
+```
+
+`backlog:` decides what happens once the named tasks are done or blocked:
+`none` — nothing more; `fill-idle` — the planner's own ranking, under every
+batch constraint; `scoped` — only prompts matching the `scoped:` epics, tags or
+tiers. `exclude:` removes prompt paths or epics from either dip. Backlog the
+brief does not cover is **never** dipped.
+
+`shadow: yes` (phase 4a) makes the shift a **shadow shift**: the watcher plans
+inside the brief exactly as a live shift would and records each proposal —
+prompt, tier, pick reason — but takes no lease and starts no worker, up to
+`max-sessions:` proposals. Its digest lists them as `proposed (shadow)`. The
+pilot opens with two shadow shifts as its baseline. At `review-at:` every shift,
+shadow or live, appends one row to `batches/pilot/pilot.md` (the pilot ledger;
+its own header says which cells are the human's to fill at check-in; in a
+shadow row they measure the human's own review time and merges in the window,
+the baseline).
+
+**`merge-cap:` in practice (phase 4b).** A `glance` worker ends at PR-open; once
+its CI is green the watcher starts one independent close-out session (same
+model, fresh context — `PyAutoBrain/AUTONOMY.md` "Stage-2 adversary amendment —
+2026-11-04") that runs the witness, checks the label and Heart, and merges or
+refuses. Merges plus close-outs in flight never exceed `merge-cap:`; a PR past
+the cap, with red CI, or refused by its close-out waits for the human's `/prm`
+and the digest says why. Each unattended merge adds one row to
+`autonomy_log.md` "Unattended `glance` sub-window (stage 2)".
+
+`max-workers:` and `max-sessions:` are the watcher's usage caps (phase 3a,
+`PyAutoBrain/agents/conductors/batch/_orchestrator.py`): at a cap it stops
+spawning and records the refusal. Omitted, they default to 2 and 6; a value that
+is not a whole number refuses the brief.
+
+`worker-mode:` is the permission mode real workers run in (phase 3b). `auto` is
+the default the human chose on 2026-11-03: a worker that still needs a person
+shows `blocked` in `claude agents --json`, and after 15 minutes the watcher
+parks it for the digest instead of leaving it waiting. `bypassPermissions` is
+refused. `sandbox: yes` marks a test shift. (Until phase 3c it was the only
+brief a real worker could run under; the one-Mind-writer path lifted that — the
+workers' Mind changes now reach `main` only through the orchestrator.)
+
+**Calibration rule.** A new brief is not accepted while the previous record
+lacks `review-minutes-actual:`. The planned figure is a seed; the 2026-08-31
+record never closed it, and an estimate nobody measures never improves.
+
+`batches/examples/` (phase 2) holds validator fixtures. It is **not** a record:
+nothing in it was dispatched, and `lifecycle.py` does not read it as one.
+
+### Digest
+
+Appended to the record at collect, under a `## Digest` heading, and **posted
+once** as a comment on the shift's `issue:`. The record plus that comment is
+the review surface; the HTML packet is written only when `packet: yes`.
+
+```markdown
+## Digest
+
+### Brief work
+- [<prompt title>](<link to the prompt>) (`<slug>`; small · PyAutoLens) — PyAutoLens#<n> — HEALTHY — glance
+- [<prompt title>](<link>) (`<slug>`; medium · PyAutoArray) — parked: awaiting-input (blocked on a person)
+
+### Backlog picks
+- [<prompt title>](<link>) (`<slug>`; small · PyAutoArray) — PyAutoArray#<n> — HEALTHY — notify — why: scoped epic cluster-strong-lensing · not in queue.md · ~3 review-min · priority normal · epic cluster-strong-lensing phase 8
+- <slug> — draft filed — why: decomposed from goal 2; needs bulk approval
+
+### Proof packets
+<one proof packet per task, in the order above>
+
+### Counters
+- merges: 2
+- glance-auto-merges: 1
+- reverts: 0
+- pushes: 0
+- drafts-filed: 1
+- packets-sent: 0
+- workers-crashed: 0
+- tokens: <n> of <token-budget>
+- review-minutes-planned: 45
+```
+
+Brief work and backlog picks stay separate, and **every backlog pick carries a
+one-line reason**: the brief's rule it was picked under, then the planner's
+ranking (queue.md position, or review-minutes and priority, then the path).
+Picks are named by their prompt's title, linked, with the slug in backticks. A
+shadow digest prints its counters as one line, since every one is 0. A pick the human
+cannot trace to the brief is a finding.
+
+**Where each part comes from (phase 3d).** The watcher writes the digest at the
+first tick after `review-at:` (`PyAutoBrain/agents/conductors/batch/_digest.py`)
+from what it recorded itself: the reason for each pick, stored at dispatch
+(`named task` · `scoped epic|tag|tier <x>` · `backlog: fill-idle`); each
+worker's `<task>.done` (one URL per line, `merged <url>` for a PR it merged
+in-turn under its tier); each worker's `<task>.proof.md`, quoted verbatim — a
+task that wrote none gets a stub saying so, never an invented packet; one
+read-only `gh pr checks` per PR for its health; and its own counters.
+`glance-auto-merges`, `reverts`, `pushes`, `drafts-filed` and `packets-sent`
+stay 0 until phases 4–5 count them (human, 2026-11-04). The comment is posted
+**once**: a local marker is created before the post, so a crash leaves no
+comment rather than two, and a failed post is not retried.
+`batch digest --record <file>` prints it early; `batch brief --check` refuses a
+digest missing a section, a counter, a pick's `why:` or a started task's
+packet.
+
+### Proof packet
+
+One screen per task — if it does not fit, the task was too big:
+
+```markdown
+#### <slug> — <PR url>
+- claim: <one sentence — what is now true>
+- before/after: <numbers, or a figure path>
+- witness: `<the Witness: command>`
+    <its output, trimmed to the lines that decide it>
+- not checked: <what this packet does not show>
+- revert: `<one command>`
+```

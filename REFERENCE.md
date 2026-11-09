@@ -8,12 +8,13 @@ completion-record schemas) resolve here, one link from the README.
 The read-only context check is `python3 scripts/token_load.py report --root
 <workspace-root>`; `check` applies the same measurement to the configured
 budgets. It supports grouped main and flat bundle roots, and reports mandatory
-AGENTS and core skill files separately from conditional references. In the
-September 2026 context pass, Mind `AGENTS.md` fell from 12,507 bytes / 214 lines
-to about 5,100 bytes / 94 lines. The broader
-`draft/maintenance/organs/reduce_session_token_load.md` remains draft; this
-measurement does not imply its Cortex, Memory, or completion-record goals are
-done.
+AGENTS and core skill files separately from conditional references. It also
+prints the three numbers `complete/2026/11/reduce-session-token-load.md`
+targets: the four organs' AGENTS.md total (Brain, Mind, Cortex, Memory; target
+≤ 6,000 tokens), the core procedure lines, and the newest month's median
+completion-record length (target ≤ 60). The Cortex/Memory files and the median
+are report-only unless `--organ-agents-budget` / `--record-median-budget` is
+passed, so Mind-only CI still passes `check`.
 
 ---
 
@@ -330,6 +331,7 @@ Free-form markdown. Strong conventions:
   Status: draft
   Consequence: glance       # notify | glance | judge — how much review it needs
   Witness: ids bit-identical, 62 -> 9.7 ms   # what makes it checkable in minutes
+  Lane: any                 # any | local-dev | ral | gpu | wsl-data; the last three imply local-dev
   Review-minutes: 3         # a seed, not a measurement
   Unattended: ready         # ready | needs-slicing | never
   Filed: 2026-07-09         # optional; the day the prompt was written
@@ -496,6 +498,14 @@ faculty at conception and all overridable by declaring them:
   **compaction rule** — a task that would need context compaction to finish is
   too big to run unattended — so a single-repo `large` task is still `ready`
   while a `large` one across four repos is not.
+- **`Lane:`** `any` | `local-dev` | `ral` | `gpu` | `wsl-data` — not a cost but
+  a resource: where the work can run at all. `any` runs anywhere, a cloud
+  session included; `local-dev` needs the laptop; `ral`, `gpu` and `wsl-data`
+  each **imply `local-dev`** and refine it (RAL test runs, the laptop GPU, data
+  under `/mnt/c`). Write `any`, never `none`. A `ral` task never submits on its
+  own: the Science orchestrator is the single RAL gateway, and a dev worker
+  hands it a **RAL test packet** (what to run, at which commit, the pass/fail
+  rule) — planned for phase 5 of the autonomous-orchestrators epic.
 
 Measured over the 153 backlog prompts the day this shipped: **151 grade `judge`,
 because three carry a witness.** Given one, the same backlog grades 33 `notify` /
@@ -814,6 +824,15 @@ What blocks, and what does not:
   sides changed differently is the only conflict — takes `main`'s copy of the
   renders, and leaves `autonomy_log.md` to git's `merge=union` driver
   (`.gitattributes`; it is append-only). What that cannot settle blocks.
+- **Branches the workflow never touches sync locally the same way.** A session
+  branch (`ccr-*` and the like) or a PR branch holding code must catch up with
+  `main` by hand, and its generated files conflict on almost every concurrent
+  push. `git fetch origin main && python3 scripts/ledger_merge.py sync` runs the
+  same merge: `--no-commit` merge of `origin/main`, `resolve`, then
+  `complete/index.md` and the dashboard re-rendered on the merged tree (the
+  Brain renderer from `$PYAUTO_BRAIN` or a sibling `PyAutoBrain`), staged for
+  you to commit. It refuses a dirty tree and stops, merge in progress, on
+  anything the grammar cannot settle.
 - **A blocked branch is written on an issue** titled ``ledger merge: `<branch>`
   needs a human`` (label `ledger-merge`), updated on every further attempt and
   closed by the run that finally lands it. A red run nobody is subscribed to
@@ -1016,7 +1035,15 @@ This longer walkthrough is loaded when a Mind operation needs its detail;
   `/prm`'s close-out (it sweeps the shipped prompt's folder and regenerates the
   page in the same commit); across the whole backlog it is
   `pyauto-brain intake reconcile` plus the refresh payload on the dashboard
-  itself.
+  itself. For work that shipped **outside** `/prm` (fixed on main, merged by a
+  session that skipped the close-out, re-filed as a duplicate), the daily
+  `looks_shipped.yml` runs the close-out guard (`intake looks-shipped`) and
+  writes `looks_shipped.json`: drafts with strong evidence — a Witness test now
+  defined, a commit naming the draft, a `complete/` record duplicating it. They
+  render under the dashboard's **Looks shipped — confirm** section and the
+  batch planner holds them back until a human closes the draft (confirm) or
+  adds a bullet to `looks_shipped_dismissed.md` (dismiss). It only flags;
+  nothing under `draft/` is written.
   `parked.md` holds tasks that were started or scoped but are not currently
   in flight (e.g. work parked in a stash, orphan worktrees); move back to
   `active.md` (or `planned.md` if re-scoping) when resuming.
