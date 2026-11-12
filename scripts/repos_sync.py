@@ -129,6 +129,7 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import smoke_bootstrap_sync as smoke_sync
@@ -357,6 +358,13 @@ CODEX_HOOK_DEFINITIONS = {
             'python3 "$(git rev-parse --show-toplevel)/bin/mind_commit_guard.py"'
         ),
         "statusMessage": "Checking shared PyAutoMind commit safety",
+    },
+    "scheduler-action-guard": {
+        "matcher": "Bash",
+        "command": (
+            'python3 "$(git rev-parse --show-toplevel)/bin/scheduler_action_guard.py"'
+        ),
+        "statusMessage": "Checking for raw scheduler actions",
     },
     "pyauto-api-gate": {
         "matcher": "Bash",
@@ -639,25 +647,23 @@ def system_map(categories, repos):
     """
     organs = {n: r for n, r in repos.items() if r["category"] == "organ"}
     lines = [
-        "**You are one organ of the PyAuto organism** — an agentic ecosystem for",
-        "human-led, natural-language software development. The organs below are",
-        "peer repositories; this repo is one of them, not a part of another.",
-        "Canonical boundaries live in `PyAutoBrain/ORGANISM.md`; the full body map",
-        "(every repo, not just organs) is `PyAutoMind/repos.yaml`.",
+        "**You are one peer organ of the PyAuto organism** (human-led, "
+        "natural-language software development), not a part of another. "
+        "Boundaries: `PyAutoBrain/ORGANISM.md`; every repo: "
+        "`PyAutoMind/repos.yaml`.",
         "",
         "| Organ | Repo | Role |",
         "|-------|------|------|",
     ]
     for name, repo in organs.items():
-        lines.append(f"| **{repo.get('organ', name)}** | {name} | {repo['role']} |")
+        role = repo.get("map_role", repo["role"])
+        lines.append(f"| **{repo.get('organ', name)}** | {name} | {role} |")
     lines += [
         "",
-        "Call chain (always this order): **Brain → Heart (gate) → Build "
-        "(execute)**. Brain agents are **conductors** (front-door; a human "
-        "drives them; they decide *and* act) or **faculties** (read-only "
-        "opinions the conductors consult; they judge and stop). New capability "
-        "grows as a faculty, not a new organ, unless it owns state or effects no "
-        "existing organ can.",
+        "Call chain: **Brain → Heart (gate) → Build (execute)**. Conductors "
+        "decide *and* act; faculties judge read-only and stop. New capability "
+        "grows as a faculty, not an organ, unless it owns state or effects no "
+        "organ can.",
         "",
         "Generated from `PyAutoMind/repos.yaml` + `PyAutoBrain/ORGANISM.md`; edit "
         "there, then run `python3 PyAutoMind/scripts/repos_sync.py --write`.",
@@ -1003,23 +1009,58 @@ def check_labels(root, repos):
 # reported as drift.
 
 
+# The opt-in AGENTS.md blocks: one declaration per generated surface drives
+# both the drift check and the --write leg. Opt-in means a repo that has not
+# added the markers is skipped (never a problem), an absent AGENTS.md is
+# skipped, and a present block must equal the generator byte-for-byte. The
+# deliverable and filing blocks are NOT here: they self-install and report a
+# missing block, so their contract differs.
+@dataclass(frozen=True)
+class OptInBlock:
+    noun: str  # as the stale message names it: "'<repo>': <noun> block is stale"
+    begin: str
+    end: str
+    organs_only: bool = False
+
+    def targets(self, root, repos):
+        for name, repo in repos.items():
+            if self.organs_only and repo["category"] != "organ":
+                continue
+            yield name, repo_checkout(root, name) / "AGENTS.md"
+
+    def check(self, root, repos, expected):
+        problems = []
+        for name, agents in self.targets(root, repos):
+            if not agents.exists():
+                continue  # not checked out, or no AGENTS.md of its own
+            text = agents.read_text()
+            if self.begin not in text or self.end not in text:
+                continue  # opt-in: the repo has not added these markers yet
+            if extract_block(text, self.begin, self.end) != expected:
+                problems.append(
+                    f"'{name}': {self.noun} block is stale — run "
+                    f"`python3 PyAutoMind/scripts/repos_sync.py --write`"
+                )
+        return problems
+
+    def write(self, path, content):
+        write_block(path, content, self.begin, self.end, required=False)
+
+
+MAP_BLOCK = OptInBlock("organism-map", MAP_BEGIN, MAP_END, organs_only=True)
+# The history policy is universal — written into every repo (not just organs)
+# that has added the markers. Single source (policy/never_rewrite_history.md)
+# + this check is what lets the safety text live inline in every repo without
+# drifting.
+HISTORY_BLOCK = OptInBlock("never-rewrite-history", HISTORY_BEGIN, HISTORY_END)
+# Same contract as the history block. Opt-in, not mandatory, so a repo that has
+# not added the markers is skipped rather than failing a session (or a CI leg)
+# that cannot see it — see the module comment on REMOTE_SESSIONS_FILE.
+REMOTE_BLOCK = OptInBlock("remote-session", REMOTE_BEGIN, REMOTE_END)
+
+
 def check_map_blocks(root, repos, smap):
-    problems = []
-    for name, repo in repos.items():
-        if repo["category"] != "organ":
-            continue
-        agents = repo_checkout(root, name) / "AGENTS.md"
-        if not agents.exists():
-            continue  # not checked out, or an organ without its own AGENTS.md
-        text = agents.read_text()
-        if MAP_BEGIN not in text or MAP_END not in text:
-            continue  # opt-in: an organ that has not added the map markers
-        if extract_block(text, MAP_BEGIN, MAP_END) != smap:
-            problems.append(
-                f"'{name}': organism-map block is stale — run "
-                f"`python3 PyAutoMind/scripts/repos_sync.py --write`"
-            )
-    return problems
+    return MAP_BLOCK.check(root, repos, smap)
 
 
 # The two `required=True` targets of --write — the workspace-root AGENTS.md
@@ -1065,48 +1106,11 @@ def check_owner_map(root, categories, repos):
 
 
 def check_history_blocks(root, repos, hpol):
-    """Every AGENTS.md that opts into the repos_sync:history markers must carry
-    the canonical policy verbatim. Single source (policy/never_rewrite_history.md)
-    + this check is what lets the safety text live inline in every repo without
-    drifting."""
-    problems = []
-    for name in repos:
-        agents = repo_checkout(root, name) / "AGENTS.md"
-        if not agents.exists():
-            continue
-        text = agents.read_text()
-        if HISTORY_BEGIN not in text or HISTORY_END not in text:
-            continue  # opt-in: repo hasn't added the history markers yet
-        if extract_block(text, HISTORY_BEGIN, HISTORY_END) != hpol:
-            problems.append(
-                f"'{name}': never-rewrite-history block is stale — run "
-                f"`python3 PyAutoMind/scripts/repos_sync.py --write`"
-            )
-    return problems
+    return HISTORY_BLOCK.check(root, repos, hpol)
 
 
 def check_remote_blocks(root, repos, remote):
-    """Same contract as the history block: opt in with the markers, and the copy
-    must then be the canonical text verbatim.
-
-    Opt-in, not mandatory, so a repo that has not added the markers is skipped
-    rather than failing a session (or a CI leg) that cannot see it. That is also
-    the honest state of this rollout — see the module comment on
-    REMOTE_SESSIONS_FILE."""
-    problems = []
-    for name in repos:
-        agents = repo_checkout(root, name) / "AGENTS.md"
-        if not agents.exists():
-            continue
-        text = agents.read_text()
-        if REMOTE_BEGIN not in text or REMOTE_END not in text:
-            continue  # opt-in: repo hasn't added the remote-session markers yet
-        if extract_block(text, REMOTE_BEGIN, REMOTE_END) != remote:
-            problems.append(
-                f"'{name}': remote-session block is stale — run "
-                f"`python3 PyAutoMind/scripts/repos_sync.py --write`"
-            )
-    return problems
+    return REMOTE_BLOCK.check(root, repos, remote)
 
 
 def check_deliverable_blocks(root, repos, policy):
@@ -1855,19 +1859,21 @@ FIREWALL_ALLOWLIST = {
     "PyAutoBrain/agents/conductors/release/nightly.sh": {"PyAutoLabs", "PyAutoLens"},
     "PyAutoBrain/agents/conductors/release/rehearse.sh": {
         "PyAutoArray",
-        "PyAutoNerves",
+        "PyAutoCTI",
         "PyAutoFit",
         "PyAutoGalaxy",
         "PyAutoLabs",
         "PyAutoLens",
+        "PyAutoNerves",
     },
     "PyAutoBrain/agents/conductors/release/validate.sh": {
         "PyAutoArray",
-        "PyAutoNerves",
+        "PyAutoCTI",
         "PyAutoFit",
         "PyAutoGalaxy",
         "PyAutoLabs",
         "PyAutoLens",
+        "PyAutoNerves",
     },
     "PyAutoBrain/agents/conductors/workspace/_workspace.py": {
         "HowToFit",
@@ -1910,6 +1916,7 @@ FIREWALL_ALLOWLIST = {
         "HowToGalaxy",
         "HowToLens",
         "PyAutoArray",
+        "PyAutoCTI",
         "PyAutoFit",
         "PyAutoGalaxy",
         "PyAutoLabs",
@@ -2050,11 +2057,13 @@ FIREWALL_ALLOWLIST = {
     },
     "PyAutoHands/autohands/aggregate_results.py": {
         "PyAutoArray",
-        "PyAutoNerves",
+        "PyAutoCTI",
         "PyAutoFit",
         "PyAutoGalaxy",
         "PyAutoLabs",
         "PyAutoLens",
+        "PyAutoNerves",
+        "autocti_workspace",
         "autofit_workspace",
         "autogalaxy_workspace",
         "autolens_workspace",
@@ -2067,6 +2076,7 @@ FIREWALL_ALLOWLIST = {
         "HowToGalaxy",
         "HowToLens",
         "PyAutoLabs",
+        "autocti_workspace",
         "autofit_workspace",
         "autogalaxy_workspace",
         "autolens_workspace",
@@ -2080,17 +2090,19 @@ FIREWALL_ALLOWLIST = {
         "HowToFit",
         "HowToGalaxy",
         "HowToLens",
+        "PyAutoCTI",
         "PyAutoFit",
         "PyAutoGalaxy",
         "PyAutoLens",
     },
     "PyAutoHands/autohands/generate_release_notes.py": {
         "PyAutoArray",
-        "PyAutoNerves",
+        "PyAutoCTI",
         "PyAutoFit",
         "PyAutoGalaxy",
         "PyAutoLabs",
         "PyAutoLens",
+        "PyAutoNerves",
         "PyAutoScientist",
     },
     "PyAutoHands/autohands/navigator.py": {
@@ -2116,6 +2128,7 @@ FIREWALL_ALLOWLIST = {
     "PyAutoHands/autohands/run_notebook.py": {"autolens_workspace"},
     "PyAutoHands/autohands/slack_release_notes.py": {
         "PyAutoArray",
+        "PyAutoCTI",
         "PyAutoFit",
         "PyAutoGalaxy",
         "PyAutoLabs",
@@ -2123,10 +2136,11 @@ FIREWALL_ALLOWLIST = {
     },
     "PyAutoHands/autohands/tag_and_merge.sh": {
         "PyAutoArray",
-        "PyAutoNerves",
+        "PyAutoCTI",
         "PyAutoFit",
         "PyAutoGalaxy",
         "PyAutoLens",
+        "PyAutoNerves",
     },
     "PyAutoHands/pre_build.sh": {
         "HowToFit",
@@ -2137,6 +2151,8 @@ FIREWALL_ALLOWLIST = {
         "PyAutoLabs",
         "PyAutoLens",
         "admin_jammy",
+        "autocti_workspace",
+        "autocti_workspace_test",
         "autofit_workspace",
         "autofit_workspace_developer",
         "autofit_workspace_test",
@@ -2181,6 +2197,7 @@ FIREWALL_ALLOWLIST = {
     },
     "PyAutoHands/tests/test_slack_release_notes.py": {
         "PyAutoArray",
+        "PyAutoCTI",
         "PyAutoFit",
         "PyAutoGalaxy",
         "PyAutoLabs",
@@ -2307,10 +2324,11 @@ FIREWALL_ALLOWLIST = {
     "PyAutoHeart/tests/test_readiness.py": {
         "HowToLens",
         "PyAutoArray",
-        "PyAutoNerves",
+        "PyAutoCTI",
         "PyAutoFit",
         "PyAutoGalaxy",
         "PyAutoLens",
+        "PyAutoNerves",
         "autogalaxy_workspace",
         "autolens_workspace",
         "autolens_workspace_test",
@@ -3047,16 +3065,8 @@ def main():
             owner_map(categories, repos),
             required=True,
         )
-        for name, repo in repos.items():
-            if repo["category"] != "organ":
-                continue
-            write_block(
-                repo_checkout(root, name) / "AGENTS.md",
-                smap,
-                MAP_BEGIN,
-                MAP_END,
-                required=False,
-            )
+        for _, agents in MAP_BLOCK.targets(root, repos):
+            MAP_BLOCK.write(agents, smap)
         # The history policy is universal — written into every repo (not just
         # organs) that has added the markers.
         #
@@ -3067,22 +3077,11 @@ def main():
         # each repo to opt in is how the long tail stays unprotected.)
         insert_deliverable_markers(root, repos)
         for name in repos:
+            agents = repo_checkout(root, name) / "AGENTS.md"
+            HISTORY_BLOCK.write(agents, hpol)
+            REMOTE_BLOCK.write(agents, remote)
             write_block(
-                repo_checkout(root, name) / "AGENTS.md",
-                hpol,
-                HISTORY_BEGIN,
-                HISTORY_END,
-                required=False,
-            )
-            write_block(
-                repo_checkout(root, name) / "AGENTS.md",
-                remote,
-                REMOTE_BEGIN,
-                REMOTE_END,
-                required=False,
-            )
-            write_block(
-                repo_checkout(root, name) / "AGENTS.md",
+                agents,
                 deliverable,
                 DELIVERABLE_BEGIN,
                 DELIVERABLE_END,
