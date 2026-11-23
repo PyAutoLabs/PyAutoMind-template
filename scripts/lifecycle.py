@@ -26,8 +26,8 @@ Subcommands
         removing the active/ prompt. Run `index --apply` afterwards.
 
   close <slug> --date YYYY-MM-DD --from-file <path> [--prompt <path|name>]
-        [--pr Repo#N ...] [--tier glance --gate "<cell>" --action <what>]
-        [--no-shadow-row] [--apply]
+        [--pr Repo#N ...] [--tier glance --gate "<cell>" --action <what>
+        --actor <who merged, required>] [--no-shadow-row] [--apply]
         The /prm hook: the whole Mind-side close-out as one verb — `record`
         (which folds the prompt, refreshes the index and prunes active.md),
         plus the parked.md/planned.md pointer, plus the tier-`glance` shadow
@@ -36,6 +36,16 @@ Subcommands
         draft/ prompt too, and it stages nothing. It does NOT render the
         dashboard — `main` heals the render — and it refuses when the record
         already exists or the slug names no prompt.
+
+  shadow-recount [-v]
+        The glance window by merge actor (the count leaves out `human-/prm`
+        and `in-turn-human-commanded`), then the historical rows classified
+        from their completion records by a printed keyword rule. Writes
+        nothing: re-marking a historical row is the human's question.
+
+  audit-sample --seed N [--rate 0.2] [--since DATE]
+        The seeded 1-in-5 audit draw over the counted glance rows (stage 2
+        too, when it has rows): the same seed and ledger give the same sample.
 
   index [--apply | --check]
         Generate complete/index.md (token-light navigation over the records);
@@ -56,6 +66,11 @@ Subcommands
           * no active/ prompt is left unclaimed by every registry
           * nothing lives under active/ except top-level prompt .md files
             (subdirectories and scripts are invisible to every other guard)
+          * every live queue.md ref resolves, and no prompt is queued twice
+          * goals.md parses: numbered 1..n, at most 10 goals of at most 200
+            characters, known fields only (an unknown epic only warns)
+          * questions.md parses: ids unique, required keys present, and
+            every Open or Deferred entry's task: a draft/ or active/ prompt
         Wire into /health and CI. `--paths` scopes the EXIT CODE to the
         findings about those paths (a branch can only be held to its own
         diff — see REFERENCE.md "Scoping a drift check to one branch");
@@ -86,6 +101,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import os
 import re
 import sys
 from pathlib import Path
@@ -136,6 +152,46 @@ SHADOW_COUNT_ANCHOR = "One row per tier-`glance` candidate"
 # rows are written by the shift watcher through the one Mind writer; this
 # heading is the anchor both it and `shadow-row --stage2` insert under.
 STAGE2_HEADING = "## Unattended `glance` sub-window (stage 2)"
+# --- who merged (PyAutoBrain AUTONOMY.md "Merge actor and random audit —
+# 2026-11-12") ---------------------------------------------------------------
+# Both tables end in two columns the tool writes: `merge actor` and `read by
+# human`. Rows written before 2026-11-12 stop at `stage` (stage 1) or `human
+# action` (stage 2); a missing cell READS as `unknown` / empty — history is not
+# rewritten to add it, so the count over those rows is unchanged.
+MERGE_ACTORS = (
+    "human-/prm",
+    "in-turn-human-commanded",
+    "in-turn-autonomous",
+    "unattended-watcher",
+    "unknown",
+)
+MERGE_ACTOR_UNKNOWN = "unknown"
+#: The window counts only merges the organism made itself ("Ledger accuracy"):
+#: a human typed the merge, or commanded it in-turn. `unknown` still counts.
+SHADOW_UNCOUNTED_ACTORS = ("human-/prm", "in-turn-human-commanded")
+SHADOW_ACTOR_COL, SHADOW_READ_COL = 6, 7
+STAGE2_ACTOR_COL, STAGE2_READ_COL = 5, 6
+#: The audit sample: a seeded 1-in-5 draw, audited within a week.
+AUDIT_RATE = 0.2
+AUDIT_DAYS = 7
+#: Set (to anything) to keep `close`/`shadow-row` off GitHub — the tests do.
+NO_GH_ENV = "LIFECYCLE_NO_GH"
+#: Which class to pass — the line every refusal and doc repeats.
+ACTOR_GUIDE = (
+    "a human-typed /prm -> human-/prm; an in-turn merge on the human's explicit "
+    "merge command -> in-turn-human-commanded; an in-turn tiered merge with no "
+    "human command -> in-turn-autonomous; the shift watcher -> unattended-watcher; "
+    "`unknown` only when passed explicitly"
+)
+
+
+def missing_actor_message(verb: str) -> str:
+    """The refusal when a row would be written without --actor: who merged is
+    never inferred, like the gate and the action."""
+    return (
+        f"{verb}: --actor is required for a shadow row — one of "
+        f"{', '.join(MERGE_ACTORS)} ({ACTOR_GUIDE}); nothing written"
+    )
 
 H2_RE = re.compile(r"^##\s+(.+?)\s*$")
 
@@ -2734,6 +2790,509 @@ def cmd_dates(args) -> int:
     return 1 if args.check else 0
 
 
+# --------------------------------------------------------------------------- #
+# queue.md — the human's ranked list (M2.3, PyAutoBrain AUTONOMY.md
+# "M2 rulings — 2026-11-12")
+# --------------------------------------------------------------------------- #
+#: A live entry's heading, `## <n>. <label>`. Any other heading ends an entry:
+#: the `## Retired` footer's `### …` entries are history, not the list.
+QUEUE_ENTRY_RE = re.compile(r"^##\s+\d+\.\s+(.+?)\s*$")
+QUEUE_FIELD_RE = re.compile(r"^-\s+(kind|ref):\s*(.+?)\s*$")
+QUEUE_KINDS = ("prompt", "retired")
+
+
+def queue_entries(root: Path) -> "list[tuple[str, str, str]]":
+    """(label, kind, ref) for each numbered entry of `queue.md`, in file order.
+
+    Read exactly as PyAutoBrain's `_batch.read_queue` reads it: a fenced block
+    is the schema's own example, and only fields under a numbered heading
+    belong to an entry. An absent file is an empty list."""
+    try:
+        text = (root / "queue.md").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    out: "list[tuple[str, str, str]]" = []
+    label, kind, ref, fenced = None, "", "", False
+    for line in text.split("\n") + ["#"]:
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if line.startswith("#"):
+            if label is not None:
+                out.append((label, kind, ref))
+            m = QUEUE_ENTRY_RE.match(line)
+            label, kind, ref = (m.group(1) if m else None), "", ""
+            continue
+        m = QUEUE_FIELD_RE.match(line)
+        if m and label is not None:
+            value = m.group(2).split("#")[0].strip()
+            if m.group(1) == "kind":
+                kind = value
+            else:
+                ref = value
+    return out
+
+
+def _queue_ref_resolves(root: Path, ref: str) -> bool:
+    """A live prompt: the `draft/` or `active/` file itself, or — because an
+    entry keeps its place after its prompt is issued — `active/<name>`."""
+    if not ref.startswith(("draft/", "active/")):
+        return False
+    if (root / ref).is_file():
+        return True
+    return (root / "active" / Path(ref).name).is_file()
+
+
+def queue_findings(root: Path) -> "list[Finding]":
+    """Every live `queue.md` entry must name a draft or active prompt.
+
+    A dangling ref outranked nothing and said nothing: on 2026-11-12 the one
+    live entry named a research prompt absorbed into its completion record ten
+    weeks earlier, and no check had ever opened the file. An entry whose work
+    has shipped moves to the `## Retired` footer with its `shipped-as:`."""
+    out: "list[Finding]" = []
+    seen: "dict[str, str]" = {}
+    for label, kind, ref in queue_entries(root):
+        # The same prompt twice is a double-tap race on the dashboard or a
+        # hand edit that forgot the first entry: the lifecycle matches entries
+        # by basename (a draft/ ref keeps its place once the prompt is in
+        # active/), so two of them are one task ranked twice.
+        if kind == "prompt" and ref:
+            name = Path(ref).name
+            if name in seen:
+                out.append(Finding(
+                    f"queue.md: entry `{label}` queues `{name}` again (first "
+                    f"as `{seen[name]}`) — keep one", ("queue.md",)))
+            else:
+                seen[name] = label
+        if kind not in QUEUE_KINDS:
+            out.append(Finding(
+                f"queue.md: entry `{label}` has kind `{kind or '(none)'}` — "
+                f"one of {' | '.join(QUEUE_KINDS)}", ("queue.md",)))
+        elif kind == "prompt" and not ref:
+            out.append(Finding(
+                f"queue.md: entry `{label}` is kind: prompt with no ref:",
+                ("queue.md",)))
+        elif kind == "prompt" and not _queue_ref_resolves(root, ref):
+            # Attributed to every place the prompt could have been, so a
+            # scoped check (`--paths` from the ledger-merge workflow) catches
+            # the change that completed it: a close-out touches `active/<name>`
+            # while the entry still names `draft/…`.
+            name = Path(ref).name
+            out.append(Finding(
+                f"queue.md: entry `{label}` ref `{ref}` resolves to no draft/ or "
+                f"active/ prompt — retire it to the footer (shipped-as:) or fix "
+                f"the path",
+                tuple(dict.fromkeys(("queue.md", ref, f"active/{name}")))))
+    return out
+
+
+def queue_retire_text(text: str, prompt_name: str, shipped_as: str, *,
+                      key: str = "shipped-as",
+                      by: str = "`lifecycle.py close`") -> "tuple[str, list[str]]":
+    """(`queue.md` with every live entry naming `prompt_name` moved to the
+    `## Retired` footer, the labels moved). Unchanged text and [] when none.
+
+    `lifecycle.py close` calls this: an entry leaves the queue when its work
+    reaches `complete/` (queue.md's own rule), and left in place its ref
+    dangles and `check` fails every later push. `scripts/queue_edit.py
+    remove` calls it too, with `key="shelved-as"` and its own `by`: an entry
+    the human took off the queue in chat, its prompt still in `draft/`."""
+    lines = text.split("\n")
+    blocks: "list[tuple[int, int, str, list[str]]]" = []  # start, end, label, body
+    fenced, start, label = False, None, None
+    for i, line in enumerate(lines + ["#"]):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced or not line.startswith("#"):
+            continue
+        if start is not None:
+            blocks.append((start, i, label, lines[start + 1:i]))
+        m = QUEUE_ENTRY_RE.match(line)
+        start, label = (i, m.group(1)) if m else (None, None)
+    moving = []
+    for b_start, b_end, b_label, body in blocks:
+        fields = {}
+        for ln in body:
+            m = re.match(r"^-\s+(kind|ref|note):\s*(.+?)\s*$", ln)
+            if m and m.group(1) not in fields:
+                fields[m.group(1)] = m.group(2).split("#")[0].strip() \
+                    if m.group(1) != "note" else m.group(2)
+        if fields.get("kind") == "prompt" and fields.get("ref") \
+                and Path(fields["ref"]).name == prompt_name:
+            moving.append((b_start, b_end, b_label, fields.get("note", "")))
+    if not moving:
+        return text, []
+    for b_start, b_end, _l, _n in reversed(moving):
+        del lines[b_start:b_end]
+    retired = []
+    for _s, _e, b_label, note in moving:
+        retired += [f"### {b_label}", f"- {key}: {shipped_as}"]
+        retired.append("- note: " + (f"{note} — " if note else "")
+                       + f"retired by {by}")
+        retired.append("")
+    head = next((i for i, ln in enumerate(lines) if ln.strip() == "## Retired"), None)
+    if head is None:
+        while lines and not lines[-1].strip():
+            lines.pop()
+        lines += ["", "## Retired", ""] + retired
+    else:
+        first = next((i for i in range(head + 1, len(lines))
+                      if lines[i].startswith("### ") or lines[i].startswith("## ")),
+                     len(lines))
+        if first == len(lines) and lines and lines[-1].strip():
+            retired = [""] + retired
+        lines[first:first] = retired
+    out = "\n".join(lines)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.rstrip("\n") + "\n", [m[2] for m in moving]
+
+
+# --------------------------------------------------------------------------- #
+# goals.md — the human's goals, in order (PyAutoMind#565)
+# --------------------------------------------------------------------------- #
+#: A goal's heading, `## <n>. <goal>`. As in queue.md, any other heading ends
+#: the goal above it, and a fenced block is the schema's own example.
+GOAL_ENTRY_RE = re.compile(r"^##\s+(\d+)\.\s+(.+?)\s*$")
+GOAL_FIELD_RE = re.compile(r"^-\s+([a-z][a-z0-9-]*):\s*(.*?)\s*$")
+GOAL_FIELDS = ("epics", "tags", "note")
+GOALS_MAX = 10
+GOAL_TEXT_MAX = 200
+
+
+def goals_parse(text: str) -> "tuple[list[dict], list[str]]":
+    """(goals in file order, parse errors) for the text of `goals.md`.
+
+    Each goal is `{"n", "text", "epics", "tags", "note", "unknown"}`; `epics`
+    and `tags` are lists. PyAutoBrain's `_batch.read_goals` reads the same
+    grammar."""
+    goals: "list[dict]" = []
+    errors: "list[str]" = []
+    cur: "dict | None" = None
+    fenced = False
+    for i, line in enumerate(text.split("\n"), 1):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if line.startswith("#"):
+            m = GOAL_ENTRY_RE.match(line)
+            cur = None
+            if m:
+                cur = {"n": int(m.group(1)), "text": m.group(2), "epics": [],
+                       "tags": [], "note": "", "unknown": []}
+                goals.append(cur)
+            continue
+        if cur is None or not line.strip():
+            continue
+        m = GOAL_FIELD_RE.match(line)
+        if not m:
+            errors.append(f"line {i}: not a `- key: value` field of goal "
+                          f"{cur['n']}: {line.strip()[:60]!r}")
+            continue
+        key, value = m.group(1), m.group(2).split(" #")[0].strip()
+        if key in ("epics", "tags"):
+            cur[key] = [v for v in re.split(r"[,\s]+", value) if v]
+        elif key == "note":
+            cur["note"] = value
+        else:
+            cur["unknown"].append(key)
+    return goals, errors
+
+
+def goals_entries(root: Path) -> "list[dict]":
+    """The goals of `goals.md`, in order. An absent file is an empty list."""
+    try:
+        text = (root / "goals.md").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return goals_parse(text)[0]
+
+
+def goals_findings(root: Path) -> "tuple[list[Finding], list[Finding]]":
+    """(problems, warnings) for `goals.md`. An absent or empty file is clean:
+    a brief built from no goals is refused by its own check instead."""
+    try:
+        text = (root / "goals.md").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return [], []
+    goals, errors = goals_parse(text)
+    at = ("goals.md",)
+    problems = [Finding(f"goals.md: {e}", at) for e in errors]
+    warnings: "list[Finding]" = []
+    if len(goals) > GOALS_MAX:
+        problems.append(Finding(
+            f"goals.md: {len(goals)} goals — at most {GOALS_MAX}", at))
+    numbers = [g["n"] for g in goals]
+    if numbers != list(range(1, len(goals) + 1)):
+        problems.append(Finding(
+            f"goals.md: goals are numbered {numbers} — number them 1..{len(goals)} "
+            f"in order", at))
+    _h, blocks = epic_blocks(root / "epics.md")
+    known = {slug.split()[0] for slug, _b in blocks if slug.split()}
+    for g in goals:
+        if len(g["text"]) > GOAL_TEXT_MAX:
+            problems.append(Finding(
+                f"goals.md: goal {g['n']} is {len(g['text'])} characters — at "
+                f"most {GOAL_TEXT_MAX}", at))
+        for key in g["unknown"]:
+            problems.append(Finding(
+                f"goals.md: goal {g['n']} has unknown field `{key}:` — one of "
+                f"{', '.join(GOAL_FIELDS)}", at))
+        for slug in g["epics"]:
+            if slug not in known:
+                warnings.append(Finding(
+                    f"goals.md: goal {g['n']} names epic `{slug}`, which is "
+                    f"not in epics.md", at))
+    return problems, warnings
+
+
+# --------------------------------------------------------------------------- #
+# questions.md — parked questions waiting for the human (M3.5,
+# PyAutoBrain#645). The shift watcher adds entries through its one Mind
+# writer; a `/questions` chat answers, defers or drops them through
+# `scripts/questions_edit.py`. The section an entry sits under is its state.
+# --------------------------------------------------------------------------- #
+#: The four states, in file order. `## <State>` may carry a trailing comment.
+QUESTION_SECTIONS = ("Open", "Deferred", "Answered", "Dropped")
+QUESTION_SECTION_RE = re.compile(r"^##\s+(Open|Deferred|Answered|Dropped)\b")
+#: An entry's heading, `### Q<n>. <task> — <short ask>`.
+QUESTION_HEAD_RE = re.compile(r"^###\s+Q(\d+)\.\s+(.+?)\s*$")
+QUESTION_FIELD_RE = re.compile(r"^-\s+([a-z][a-z-]*):[ \t]*(.*?)\s*$")
+QUESTION_REQUIRED = ("task", "issue", "kind", "ask", "shift", "asked", "worker")
+QUESTION_KINDS = ("question", "blocked", "ruling")
+#: A `ruling` (filed by PyAutoBrain's readiness pass, `batch ready`, M3.3) names
+#: the gate it found on a queued task in `gate:` and may have no `issue:`.
+QUESTION_RULING = "ruling"
+QUESTION_GATE_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+def question_required(kind: "str | None") -> "tuple[str, ...]":
+    """The keys an entry of `kind` must carry: a ruling needs `gate:`, not `issue:`."""
+    if kind == QUESTION_RULING:
+        return tuple(k for k in QUESTION_REQUIRED if k != "issue") + ("gate",)
+    return QUESTION_REQUIRED
+
+
+def question_gate_errors(kind: "str | None", gate) -> "list[str]":
+    """What is wrong with an entry's `gate:` given its kind (missing is left
+    to the required-key check)."""
+    if kind == QUESTION_RULING:
+        if gate and not QUESTION_GATE_RE.match(str(gate)):
+            return [f"gate `{gate}` is not a kebab-case slug ([a-z][a-z0-9-]*)"]
+        return []
+    return ["gate: is for kind ruling only"] if gate else []
+#: The keys each later state adds (and `reopen` strips).
+QUESTION_STATE_KEYS = ("until", "deferred", "answered", "answer", "answer-comment",
+                       "dropped")
+QUESTION_STATE_REQUIRED = {"answered": ("answered", "answer"), "dropped": ("dropped",)}
+
+
+def questions_parse(text: str) -> "tuple[list[dict], list[str]]":
+    """(entries, errors) for the text of `questions.md`, in file order.
+
+    Each entry: `{id: "Q17", n: 17, title, state: open|deferred|answered|
+    dropped, fields: {key: value}, start, end}` — `[start, end)` is its line
+    span, heading included, up to the next heading of any level. A fenced
+    block is the schema's own example; any heading ends the entry above it.
+    PyAutoBrain's `_questions.read` reads the same grammar (a parity test
+    holds the two together)."""
+    lines = text.split("\n")
+    out: "list[dict]" = []
+    errors: "list[str]" = []
+    state, cur, fenced = None, None, False
+    for i, line in enumerate(lines + ["#"]):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if line.startswith("#"):
+            if cur is not None:
+                cur["end"] = i
+                out.append(cur)
+                cur = None
+            if i == len(lines):
+                break
+            if line.startswith("## ") or line.startswith("# "):
+                m = QUESTION_SECTION_RE.match(line)
+                state = m.group(1).lower() if m else None
+                continue
+            if line.startswith("### "):
+                m = QUESTION_HEAD_RE.match(line)
+                if not m:
+                    if state is not None:
+                        errors.append(f"heading `{line.strip()[:80]}` under ## "
+                                      f"{state.title()} is not `### Q<n>. <task> — <ask>`")
+                    continue
+                if state is None:
+                    errors.append(f"Q{m.group(1)} sits outside the four sections "
+                                  f"({', '.join(QUESTION_SECTIONS)})")
+                    continue
+                cur = {"id": f"Q{int(m.group(1))}", "n": int(m.group(1)),
+                       "title": m.group(2), "state": state, "fields": {}, "start": i}
+            continue
+        if cur is not None:
+            m = QUESTION_FIELD_RE.match(line)
+            if m and m.group(1) not in cur["fields"]:
+                cur["fields"][m.group(1)] = m.group(2)
+    return out, errors
+
+
+def questions_entries(root: Path) -> "list[dict]":
+    """The entries of `questions.md`; an absent file is an empty list."""
+    try:
+        text = (root / "questions.md").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return questions_parse(text)[0]
+
+
+def questions_findings(root: Path) -> "list[Finding]":
+    """Every entry well-formed, its id unique, and every Open or Deferred
+    entry's `task:` a live prompt in `draft/` or `active/` (as a queue ref
+    resolves: the path itself, or `active/<name>` once issued). An absent
+    file is clean."""
+    try:
+        text = (root / "questions.md").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    entries, errors = questions_parse(text)
+    at = ("questions.md",)
+    out = [Finding(f"questions.md: {e}", at) for e in errors]
+    seen: "dict[str, int]" = {}
+    triples: "dict[tuple, str]" = {}
+    rulings: "dict[tuple, str]" = {}
+    for e in entries:
+        qid, f = e["id"], e["fields"]
+        seen[qid] = seen.get(qid, 0) + 1
+        if seen[qid] == 2:
+            out.append(Finding(f"questions.md: {qid} is used twice — ids are unique", at))
+        kind = f.get("kind")
+        missing = [k for k in question_required(kind)
+                   + QUESTION_STATE_REQUIRED.get(e["state"], ()) if not f.get(k)]
+        if missing:
+            out.append(Finding(f"questions.md: {qid} has no {', '.join(k + ':' for k in missing)}",
+                               at))
+        if kind and kind not in QUESTION_KINDS:
+            out.append(Finding(f"questions.md: {qid} has kind `{kind}` — one of "
+                               f"{' | '.join(QUESTION_KINDS)}", at))
+        for err in question_gate_errors(kind, f.get("gate")):
+            out.append(Finding(f"questions.md: {qid} {err}", at))
+        if kind == QUESTION_RULING and f.get("gate") and f.get("task") \
+                and e["state"] in ("open", "deferred"):
+            pair = (Path(f["task"]).name, f["gate"])
+            if pair in rulings:
+                out.append(Finding(f"questions.md: {qid} repeats {rulings[pair]} (an open "
+                                   f"ruling on the same task and gate `{f['gate']}`) — "
+                                   "keep one", at))
+            rulings.setdefault(pair, qid)
+        # Rulings are unique by (task, gate) below, not by this triple.
+        triple = (f.get("shift"), f.get("task"), f.get("issue"))
+        if kind != QUESTION_RULING and all(triple):
+            if triple in triples:
+                out.append(Finding(f"questions.md: {qid} repeats {triples[triple]} (same "
+                                   "shift, task and issue) — keep one", at))
+            triples.setdefault(triple, qid)
+        task = f.get("task") or ""
+        if e["state"] in ("open", "deferred") and task \
+                and not _queue_ref_resolves(root, task):
+            name = Path(task).name
+            out.append(Finding(
+                f"questions.md: {qid} ({e['state']}) task `{task}` resolves to no draft/ or "
+                "active/ prompt — answer or drop it, or fix the path",
+                tuple(dict.fromkeys(("questions.md", task, f"active/{name}")))))
+    return out
+
+
+def _question_block(lines: "list[str]", e: dict) -> "list[str]":
+    block = lines[e["start"]:e["end"]]
+    while block and not block[-1].strip():
+        block.pop()
+    return block
+
+
+def question_set_fields(block: "list[str]", fields: "dict[str, str]",
+                        drop: "tuple[str, ...]" = ()) -> "list[str]":
+    """An entry's lines with each `fields` key set (its line replaced, else
+    appended) and each `drop` key's line removed."""
+    out = []
+    done = set()
+    for ln in block:
+        m = QUESTION_FIELD_RE.match(ln)
+        key = m.group(1) if m else None
+        if key in drop and key not in fields:
+            continue
+        if key in fields:
+            if key in done:
+                continue
+            out.append(f"- {key}: {fields[key]}")
+            done.add(key)
+            continue
+        out.append(ln)
+    out += [f"- {k}: {v}" for k, v in fields.items() if k not in done]
+    return out
+
+
+def question_insert(lines: "list[str]", state: str, block: "list[str]") -> "list[str]":
+    """`lines` with `block` added at the end of the `## <State>` section."""
+    fenced, head = False, None
+    for i, ln in enumerate(lines):
+        if ln.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if not fenced and (m := QUESTION_SECTION_RE.match(ln)) and m.group(1).lower() == state:
+            head = i
+            break
+    if head is None:
+        raise ValueError(f"questions.md has no `## {state.title()}` section")
+    end = next((j for j in range(head + 1, len(lines))
+                if lines[j].startswith("## ") or lines[j].startswith("# ")), len(lines))
+    last = end - 1
+    while last > head and not lines[last].strip():
+        last -= 1
+    tail = lines[end:]
+    return lines[:last + 1] + [""] + list(block) + ([""] if tail else []) + tail
+
+
+def _questions_tidy(lines: "list[str]") -> str:
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).rstrip("\n") + "\n"
+
+
+def question_move_text(text: str, qid: str, state: str, fields: "dict[str, str]",
+                       drop: "tuple[str, ...]" = ()) -> str:
+    """`questions.md` with entry `qid` moved to the end of `## <state>`, its
+    `fields` set and its `drop` keys removed. KeyError for an unknown id."""
+    entries, _errs = questions_parse(text)
+    e = next((x for x in entries if x["id"] == qid), None)
+    if e is None:
+        raise KeyError(qid)
+    lines = text.split("\n")
+    block = question_set_fields(_question_block(lines, e), fields, drop)
+    rest = lines[:e["start"]] + lines[e["end"]:]
+    return _questions_tidy(question_insert(rest, state, block))
+
+
+def questions_close_text(text: str, prompt_name: str, day: str, *,
+                         by: str = "`lifecycle.py close`") -> "tuple[str, list[str]]":
+    """(`questions.md` with every Open or Deferred entry whose `task:` names
+    `prompt_name` moved to Answered as `answer: (task completed)`, the ids
+    moved). Unchanged text and [] when none — `lifecycle.py close` runs it as
+    it retires queue entries."""
+    entries, _errs = questions_parse(text)
+    ids = [e["id"] for e in entries if e["state"] in ("open", "deferred")
+           and Path(e["fields"].get("task", "")).name == prompt_name]
+    for qid in ids:
+        text = question_move_text(text, qid, "answered", {
+            "answered": f"{day} by {by} (close)", "answer": "(task completed)"},
+            drop=("until", "deferred"))
+    return text, ids
+
+
 def check_findings(root: Path) -> "tuple[list[Finding], list[Finding]]":
     """(problems, warnings) for the whole tree, each attributed to its paths.
 
@@ -2802,6 +3361,16 @@ def check_findings(root: Path) -> "tuple[list[Finding], list[Finding]]":
     # closed record with no measured review cost is a warning (the number is
     # the human's to write, and its absence costs the budget, not the ledger).
     problems.extend(batch_member_findings(root))
+    # The human's ranked list: a dangling ref is drift (M2.3).
+    problems.extend(queue_findings(root))
+    # The human's goals (PyAutoMind#565): briefs copy them, so a malformed file
+    # is drift; an epic it names that epics.md does not list only warns.
+    g_problems, g_warnings = goals_findings(root)
+    problems.extend(g_problems)
+    warnings.extend(g_warnings)
+    # Parked questions waiting for the human (M3.5, PyAutoBrain#645): a
+    # malformed entry or an Open one whose task is gone is drift.
+    problems.extend(questions_findings(root))
     warnings.extend(batch_member_notes_findings(root))
     warnings.extend(batch_record_warning_findings(root))
     return problems, warnings
@@ -2926,6 +3495,8 @@ def shadow_count_line(rows: "list[list[str]]") -> str:
     on 2026-10-02. They all stay listed — deleting history to make a counter
     tidy is how a pre-registered rule stops being pre-registered — and are
     named as uncounted so the number cannot be read as "the table has N rows".
+    In-window rows a human merged (merge actor `human-/prm` or
+    `in-turn-human-commanded`) are named apart, as left out by merge actor.
     """
     graded = [r for r in rows if shadow_counts(r)]
     uncounted = len(rows) - len(graded)
@@ -2938,10 +3509,17 @@ def shadow_count_line(rows: "list[list[str]]") -> str:
         f"{two}) — window re-scoped to tier `{SHADOW_TIER}` "
         f"{SHADOW_REOPENED}; first `{SHADOW_TIER}` row: {first}"
     )
+    by_human = sum(1 for r in rows if shadow_in_window(r) and not shadow_counts(r))
+    uncounted -= by_human
     if uncounted:
         line += (
             f"; earlier rows not counted (the tier-`notify` window, "
             f"closed {SHADOW_REOPENED}, and legacy): {uncounted}"
+        )
+    if by_human:
+        line += (
+            f"; left out by merge actor ({' / '.join(SHADOW_UNCOUNTED_ACTORS)}): "
+            f"{by_human}"
         )
     if len(graded) >= SHADOW_TARGET:
         # Pre-registered size met: the line itself must say whether the human
@@ -2953,14 +3531,28 @@ def shadow_count_line(rows: "list[list[str]]") -> str:
     return line
 
 
-def shadow_counts(row: "list[str]") -> bool:
-    """Whether one table row counts toward the current window."""
+def shadow_in_window(row: "list[str]") -> bool:
+    """Whether a row is a tier-`glance` stage-1/2 row of the re-scoped window —
+    the count before the merge-actor rule is applied."""
     return (
         len(row) > 5
         and row[5] in SHADOW_STAGES
         and row[2] == SHADOW_TIER
         and row[0] >= SHADOW_REOPENED
     )
+
+
+def row_actor(row: "list[str]", col: int = SHADOW_ACTOR_COL) -> str:
+    """The merge-actor class of one row: the first token of its cell (the rest
+    is `mergedBy` evidence); a row without the column reads `unknown`."""
+    cell = row[col].strip() if len(row) > col else ""
+    return cell.split()[0] if cell else MERGE_ACTOR_UNKNOWN
+
+
+def shadow_counts(row: "list[str]") -> bool:
+    """Whether one table row counts toward the current window: in the window,
+    and not merged by a human (typed `/prm`, or commanded in-turn)."""
+    return shadow_in_window(row) and row_actor(row) not in SHADOW_UNCOUNTED_ACTORS
 
 
 def _shadow_cell(value: str) -> str:
@@ -3024,6 +3616,244 @@ def stage2_apply(text: str, row: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+# --------------------------------------------------------------------------- #
+# the merge actor — who merged, written by the tool
+# --------------------------------------------------------------------------- #
+#: `Repo#N` refs in a task cell (`PR#N` is a bare PR number, never a repo).
+PR_REF_RE = re.compile(r"\b([A-Za-z][\w.-]*)#(\d+)\b")
+
+
+def task_pr_refs(task: str) -> "list[tuple[str, int]]":
+    """The (repo, number) pairs a task cell names, in order, deduplicated."""
+    seen: "list[tuple[str, int]]" = []
+    for repo, num in PR_REF_RE.findall(task):
+        ref = (repo, int(num))
+        if repo != "PR" and ref not in seen:
+            seen.append(ref)
+    return seen
+
+
+def gh_pr_merge_info(
+    repo: str, number: int, owner: str = PUBLISHED_OWNER, gh=None
+) -> "dict | None":
+    """`gh pr view --json mergedBy,mergedAt` for one PR, as
+    {"mergedBy": login or "", "mergedAt": iso or ""}; None when GitHub could
+    not say. `gh` is the seam: a callable taking gh's argv, returning
+    (code, stdout, stderr) — `_gh` by default."""
+    import json
+
+    code, out, _ = (gh or _gh)(
+        ["pr", "view", str(number), "-R", f"{owner}/{repo}",
+         "--json", "mergedBy,mergedAt"]
+    )
+    if code != 0:
+        return None
+    try:
+        data = json.loads(out or "{}")
+    except ValueError:
+        return None
+    by = data.get("mergedBy") or {}
+    return {"mergedBy": (by.get("login") if isinstance(by, dict) else str(by)) or "",
+            "mergedAt": data.get("mergedAt") or ""}
+
+
+def merge_actor_cell(
+    actor: str, refs: "list[tuple[str, int]]", gh=None, lookup: bool = True
+) -> "tuple[str, list[str]]":
+    """(the `merge actor` cell, warnings).
+
+    The class is the caller's explicit flag — how the merge was started is a
+    fact only the session that started it knows: a human-typed `/prm`, an
+    in-turn merge the human commanded, an in-turn autonomous merge, or the
+    watcher. GitHub adds the evidence, never the class: `gh pr view --json
+    mergedBy,mergedAt` on every PR the task names, appended as
+    `(mergedBy <login>[, n/m PRs])`. A PR GitHub reports unmerged is a warning,
+    not a guess. `NO_GH_ENV` turns the real lookup off (an injected `gh` still
+    runs — that is the tests' seam)."""
+    if actor not in MERGE_ACTORS:
+        raise ValueError(f"merge actor {actor!r} is not one of {', '.join(MERGE_ACTORS)}")
+    warnings: "list[str]" = []
+    if not lookup or not refs or (gh is None and os.environ.get(NO_GH_ENV)):
+        return actor, warnings
+    logins: "list[str]" = []
+    for repo, num in refs:
+        info = gh_pr_merge_info(repo, num, gh=gh)
+        if info is None:
+            warnings.append(f"{repo}#{num}: GitHub could not say who merged it")
+        elif not info["mergedBy"]:
+            warnings.append(f"{repo}#{num}: GitHub reports it not merged")
+        else:
+            logins.append(info["mergedBy"])
+    if not logins:
+        return actor, warnings
+    names = sorted(set(logins))
+    ev = "mergedBy " + ", ".join(names)
+    if len(logins) < len(refs):
+        ev += f", {len(logins)}/{len(refs)} PRs"
+    if actor in ("human-/prm", "in-turn-human-commanded") and all(
+        n.endswith("[bot]") for n in names
+    ):
+        warnings.append(f"actor {actor} but every merge was by a bot ({ev})")
+    return f"{actor} ({ev})", warnings
+
+
+# --------------------------------------------------------------------------- #
+# the historical recount — printed, never written back
+# --------------------------------------------------------------------------- #
+#: The transparent keyword rule over a completion record's own text (above
+#: `## Original prompt`). Applied in this order; the first match wins.
+RECOUNT_RULES = (
+    ("human /prm", re.compile(
+        r"(?i)(?:human|user)[^.\n]{0,40}(?:/|\$)?prm"
+        r"|(?:/|\$)prm[^.\n]{0,40}(?:human|user)"
+        r"|merged? (?:via|by) (?:human )?/prm|typed `?/prm|human merge")),
+    ("automatic/in-turn", re.compile(
+        r"(?i)auto-?merg|glance auto|merged by the shipping session"
+        r"|in-turn merge|merged in-turn|tier.{0,12}glance.{0,60}merg")),
+)
+RECOUNT_NOT_STATED = "not stated"
+RECOUNT_NO_RECORD = "no record"
+
+
+def record_merge_class(text: str) -> str:
+    """One completion record's merge class by RECOUNT_RULES."""
+    head = text.split("## Original prompt", 1)[0]
+    for name, rx in RECOUNT_RULES:
+        if rx.search(head):
+            return name
+    return RECOUNT_NOT_STATED
+
+
+def recount_rows(rows: "list[list[str]]", records: "dict[str, Path]") -> "list[tuple[list[str], str]]":
+    """(row, record class) for every in-window row; `records` maps slug → path."""
+    out = []
+    for r in rows:
+        if not shadow_in_window(r):
+            continue
+        slug = safe_name(re.split(r"[ (]", r[1].strip())[0])
+        path = records.get(slug)
+        if path is None:
+            out.append((r, RECOUNT_NO_RECORD))
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            out.append((r, RECOUNT_NO_RECORD))
+            continue
+        out.append((r, record_merge_class(text)))
+    return out
+
+
+def _class_line(label: str, pairs: "list[tuple[list[str], str]]") -> str:
+    order = [n for n, _ in RECOUNT_RULES] + [RECOUNT_NOT_STATED, RECOUNT_NO_RECORD]
+    counts = {k: 0 for k in order}
+    for _, k in pairs:
+        counts[k] += 1
+    cells = ", ".join(f"{k} {counts[k]}" for k in order if counts[k] or k != RECOUNT_NO_RECORD)
+    return f"  {label} ({len(pairs)} rows): {cells}"
+
+
+def cmd_shadow_recount(args) -> int:
+    """Print the stage-1 window by merge actor, then the historical recount
+    by completion record. Writes nothing: re-marking a historical row is the
+    human's judge question, not this verb's."""
+    log = Path(args.log) if args.log else AUTONOMY_LOG
+    if not log.is_file():
+        print(f"shadow-recount: no ledger at {log}", file=sys.stderr)
+        return 2
+    try:
+        rows = shadow_rows(log.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        print(f"shadow-recount: {exc}", file=sys.stderr)
+        return 2
+    window = [r for r in rows if shadow_in_window(r)]
+    actors: "dict[str, int]" = {}
+    for r in window:
+        actors[row_actor(r)] = actors.get(row_actor(r), 0) + 1
+    counted = sum(1 for r in window if shadow_counts(r))
+    print(f"stage-1 table: {len(window)} tier-`{SHADOW_TIER}` rows in the window")
+    print("  merge actor (column; a row without it reads `unknown`): "
+          + ", ".join(f"{a} {actors[a]}" for a in MERGE_ACTORS if a in actors))
+    print(f"  count rule leaves out {' / '.join(SHADOW_UNCOUNTED_ACTORS)}: "
+          f"counted {counted}, left out {len(window) - counted}")
+
+    records = {safe_name(s): p for _, s, p in _all_records()}
+    pairs = recount_rows(rows, records)
+    print("\nrecount by completion record (printed only — no row is re-marked):")
+    print("  rule, first match wins, over the record text above `## Original prompt`:")
+    for name, rx in RECOUNT_RULES:
+        print(f"    {name}: /{rx.pattern}/")
+    print(f"    otherwise: {RECOUNT_NOT_STATED} (no record found: {RECOUNT_NO_RECORD})")
+    ruled = [p for p in pairs if p[0][0] < SHADOW_RULED]
+    print(_class_line(f"the window the {SHADOW_RULED} ruling rested on, "
+                      f"{SHADOW_REOPENED} to the day before", ruled))
+    later = [p for p in pairs if p[0][0] >= SHADOW_RULED]
+    print(_class_line(f"rows since the ruling, {SHADOW_RULED} on", later))
+    print(_class_line("all", pairs))
+    if args.verbose:
+        for r, k in pairs:
+            print(f"    {r[0]}  {k:<18}  {row_actor(r):<24}  {r[1][:70]}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
+# the audit sample — seeded, 1 in 5, never hand-picked
+# --------------------------------------------------------------------------- #
+def audit_population(text: str, since: "str | None" = None) -> "list[tuple[str, list[str]]]":
+    """(table, row) for every row an audit draws from: the counted stage-1
+    rows, then the stage-2 rows when the sub-window has any — in table order."""
+    pop = [("stage 1", r) for r in shadow_rows(text) if shadow_counts(r)]
+    try:
+        pop += [("stage 2", r) for r in stage2_rows(text)
+                if r and r[0] and row_actor(r, STAGE2_ACTOR_COL) not in SHADOW_UNCOUNTED_ACTORS]
+    except ValueError:
+        pass  # a ledger without the stage-2 sub-window
+    if since:
+        pop = [(t, r) for t, r in pop if r[0] >= since]
+    return pop
+
+
+def audit_sample(
+    population: "list[tuple[str, list[str]]]", seed: int, rate: float = AUDIT_RATE
+) -> "list[tuple[str, list[str]]]":
+    """A reproducible draw of ceil(rate × n) rows: the same population and seed
+    give the same sample, in table order."""
+    import math
+    import random
+
+    if not population:
+        return []
+    k = min(len(population), max(1, math.ceil(rate * len(population))))
+    picked = sorted(random.Random(seed).sample(range(len(population)), k))
+    return [population[i] for i in picked]
+
+
+def cmd_audit_sample(args) -> int:
+    """Print the seeded audit sample. Writes nothing."""
+    log = Path(args.log) if args.log else AUTONOMY_LOG
+    if not log.is_file():
+        print(f"audit-sample: no ledger at {log}", file=sys.stderr)
+        return 2
+    if not 0 < args.rate <= 1:
+        print(f"audit-sample: --rate {args.rate} must be in (0, 1]", file=sys.stderr)
+        return 2
+    try:
+        pop = audit_population(log.read_text(encoding="utf-8"), args.since)
+    except ValueError as exc:
+        print(f"audit-sample: {exc}", file=sys.stderr)
+        return 2
+    sample = audit_sample(pop, args.seed, args.rate)
+    today = _dt.datetime.now(_dt.timezone.utc).date()
+    due = (today + _dt.timedelta(days=AUDIT_DAYS)).isoformat()
+    print(f"audit sample: seed {args.seed}, rate {args.rate}, "
+          f"{len(sample)} of {len(pop)} rows"
+          + (f" since {args.since}" if args.since else "")
+          + f" — audit by {due}")
+    for table, r in sample:
+        print(f"  [{table}] {r[0]}  {r[1]}")
+    return 0
+
+
 def cmd_shadow_row(args) -> int:
     """Append one tier-`glance` row to the shadow window (the close-out hook).
 
@@ -3038,12 +3868,28 @@ def cmd_shadow_row(args) -> int:
     text = log.read_text(encoding="utf-8")
 
     date = args.date or _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d")
-    if getattr(args, "stage2", False):
+    stage2 = getattr(args, "stage2", False)
+    actor = getattr(args, "actor", None)
+    if not actor:
+        print(missing_actor_message("shadow-row"), file=sys.stderr)
+        return 2
+    try:
+        actor_cell, warnings = merge_actor_cell(
+            actor, task_pr_refs(args.task), lookup=not getattr(args, "no_gh", False)
+        )
+    except ValueError as exc:
+        print(f"shadow-row: {exc}", file=sys.stderr)
+        return 2
+    for w in warnings:
+        print(f"shadow-row: warning — {w}", file=sys.stderr)
+    read = getattr(args, "read_by_human", None) or ""
+    if stage2:
         if not getattr(args, "brief", None):
             print("shadow-row: --stage2 needs --brief <slot>", file=sys.stderr)
             return 2
         row = "| " + " | ".join(
-            _shadow_cell(c) for c in (date, args.task, args.brief, args.gate, args.action)
+            _shadow_cell(c)
+            for c in (date, args.task, args.brief, args.gate, args.action, actor_cell, read)
         ) + " |"
         try:
             updated = stage2_apply(text, row)
@@ -3062,7 +3908,8 @@ def cmd_shadow_row(args) -> int:
         "| "
         + " | ".join(
             _shadow_cell(c)
-            for c in (date, args.task, args.tier, args.gate, args.action, args.stage)
+            for c in (date, args.task, args.tier, args.gate, args.action, args.stage,
+                      actor_cell, read)
         )
         + " |"
     )
@@ -3162,14 +4009,93 @@ def close_prompt(
     return None, ""
 
 
-def close_registries(root: Path, slug: str) -> "list[str]":
-    """The registry files still carrying a `## <slug>` section for this task."""
+_ISSUE_HEADER_RE = re.compile(r"^Issue:\s*(\S+)", re.M)
+
+
+def _issue_key(value: "str | None") -> str:
+    """An issue URL as the registries compare it: first token, no trailing `/`."""
+    words = (value or "").split()
+    return words[0].rstrip("/") if words else ""
+
+
+def prompt_issue(prompt: "Path | None") -> str:
+    """The prompt's `Issue:` header, else ""."""
+    if prompt is None:
+        return ""
+    try:
+        m = _ISSUE_HEADER_RE.search(prompt.read_text(errors="replace"))
+    except OSError:
+        return ""
+    return _issue_key(m.group(1)) if m else ""
+
+
+def close_registries(
+    root: Path,
+    slug: str,
+    prompt: "Path | None" = None,
+    issue: "str | None" = None,
+) -> "list[tuple[str, str]]":
+    """(registry file, `## heading` slug) for each registry still carrying this
+    task's section.
+
+    Matched in order, per file: the heading by slug; else the one row whose
+    `prompt:` resolves to the task's prompt file; else the one row whose
+    `issue:` is the task's issue (`issue`, else the prompt's `Issue:` header).
+    A `prompt:` or `issue:` match counts only when exactly one row matches —
+    two candidates are a human's to tell apart (PyAutoBrain#661: after shift
+    2026-11-16-pm, rows whose heading was not the slug were left behind)."""
     want = safe_name(slug)
-    return [
-        reg
-        for reg in REGISTRY_FILES
-        if want in {safe_name(s) for s in ledger_slugs(root / reg)}
-    ]
+    target = prompt.resolve() if prompt is not None else None
+    issue_key = _issue_key(issue) or prompt_issue(prompt)
+
+    def _other_prompt(fields: dict) -> bool:
+        """The row's `prompt:` names a file other than this task's, whether
+        that file still exists or not."""
+        raw = (fields.get("prompt") or "").split()
+        if not raw:
+            return False
+        resolved = _prompt_of(fields)
+        if resolved is not None:
+            return resolved != target
+        return target is None or Path(raw[0]).name != target.name
+
+    def _prompt_of(fields: dict) -> "Path | None":
+        raw = (fields.get("prompt") or "").split()
+        if not raw:
+            return None
+        resolved, _ = resolve_prompt(root, raw[0])
+        return resolved.resolve() if resolved is not None else None
+
+    out: "list[tuple[str, str]]" = []
+    unmatched: "list[tuple[str, list]]" = []
+    for reg in REGISTRY_FILES:
+        entries = registry_entries(root / reg)
+        by_slug = [h for h, _ in entries if safe_name(h) == want]
+        if by_slug:
+            out.append((reg, by_slug[0]))
+            continue
+        if target is not None:
+            by_prompt = [h for h, f in entries if _prompt_of(f) == target]
+            if len(by_prompt) == 1:
+                out.append((reg, by_prompt[0]))
+                continue
+            if by_prompt:
+                continue   # ambiguous: never guess
+        unmatched.append((reg, entries))
+    # The issue is the last resort (#661 review): issues are shared (an epic's
+    # phases, a follow-up), so it is used only when the task's own row matched
+    # by slug or prompt in no registry, and never takes a row whose `prompt:`
+    # resolves to another prompt file.
+    if issue_key and not out:
+        for reg, entries in unmatched:
+            by_issue = [
+                h for h, f in entries
+                if _issue_key(f.get("issue")) == issue_key
+                and not _other_prompt(f)
+            ]
+            if len(by_issue) == 1:
+                out.append((reg, by_issue[0]))
+    return out
 
 
 def close_references(root: Path, slug: str, rel: str) -> "list[str]":
@@ -3279,10 +4205,25 @@ def cmd_close(args) -> int:
         return 1
 
     rel = _rel(root, prompt)
-    registries = close_registries(root, args.slug)
+    registries = close_registries(root, args.slug, prompt, getattr(args, "issue", None))
     task_cell, why = close_shadow_task(args)
     row = None
+    actor_cell = None
     if task_cell is not None:
+        actor = getattr(args, "actor", None)
+        if not actor:
+            print(missing_actor_message("lifecycle close"), file=sys.stderr)
+            return 1
+        try:
+            actor_cell, warnings = merge_actor_cell(
+                actor, task_pr_refs(task_cell),
+                lookup=not getattr(args, "no_gh", False),
+            )
+        except ValueError as exc:
+            print(f"lifecycle close: {exc}", file=sys.stderr)
+            return 1
+        for w in warnings:
+            print(f"lifecycle close: warning — {w}", file=sys.stderr)
         row = (
             "| "
             + " | ".join(
@@ -3294,6 +4235,8 @@ def cmd_close(args) -> int:
                     args.gate,
                     args.action,
                     args.stage,
+                    actor_cell,
+                    getattr(args, "read_by_human", None) or "",
                 )
             )
             + " |"
@@ -3302,18 +4245,51 @@ def cmd_close(args) -> int:
     print(f"close: {args.slug}")
     print(f"  record:   {dest.relative_to(root)}  (folds {rel}, found via {how})")
     print(f"  remove:   {rel}")
-    for reg in registries:
-        print(f"  registry: {reg} — drop the `## {slug}` entry")
+    for reg, heading in registries:
+        found = "" if safe_name(heading) == slug else " (matched by prompt path or issue)"
+        print(f"  registry: {reg} — drop the `## {heading}` entry{found}")
     if not registries:
         print(
             "  registry: no entry in " + "/".join(REGISTRY_FILES) + " — nothing to drop"
         )
     print(f"  index:    {INDEX_MD.relative_to(root)} — regenerated")
     print(f"  shadow:   {row}" if row else f"  shadow:   {why}")
+    # queue.md (M2.3): the entry leaves the queue when its work reaches
+    # complete/, so its ref never dangles past this close-out.
+    queue_md = root / "queue.md"
+    queue_new, queue_moved = (None, [])
+    if queue_md.is_file():
+        queue_new, queue_moved = queue_retire_text(
+            queue_md.read_text(encoding="utf-8"), prompt.name,
+            f"{dest.relative_to(root).as_posix()} ({args.date})")
+    for label in queue_moved:
+        print(f"  queue:    queue.md — retire `{label}` to the footer (shipped-as:)")
+    # questions.md (M3.5): the task's Open or Deferred questions are moot once
+    # its work reaches complete/, and left Open their task: would dangle.
+    questions_md = root / "questions.md"
+    questions_new, questions_moved = (None, [])
+    if questions_md.is_file():
+        questions_new, questions_moved = questions_close_text(
+            questions_md.read_text(encoding="utf-8"), prompt.name, args.date)
+    for qid in questions_moved:
+        print(f"  question: questions.md — {qid} to Answered (answer: (task completed))")
+
+    # Every path this close-out writes, in the order above — the explicit list
+    # `prompt_sync_push` needs (it commits only the paths it is given).
+    log = Path(args.log) if getattr(args, "log", None) else AUTONOMY_LOG
+    touched = [
+        dest.relative_to(root).as_posix(),
+        rel,
+        INDEX_MD.relative_to(root).as_posix(),
+        *(reg for reg, _ in registries),
+        *([_rel(root, log)] if row is not None else []),
+        *(["queue.md"] if queue_moved else []),
+        *(["questions.md"] if questions_moved else []),
+    ]
 
     if not args.apply:
         print("  (dry run; nothing written — pass --apply)")
-        _close_tail(root, args, rel)
+        _close_tail(root, args, rel, touched)
         return 0
 
     rec = _CloseArgs(
@@ -3328,28 +4304,37 @@ def cmd_close(args) -> int:
     rc = cmd_record(rec)
     if rc != 0:
         return rc
-    # `record` prunes active.md; the pointers a task may also hold elsewhere
-    # are this verb's to drop.
-    for reg in registries:
-        if reg == "active.md":
+    # `record` prunes active.md by slug; a row matched by prompt path or
+    # issue (#661), and the pointers a task may also hold elsewhere, are this
+    # verb's to drop — each by the heading it matched.
+    for reg, heading in registries:
+        if reg == "active.md" and safe_name(heading) == slug:
             continue
-        if _prune_ledger_section(root / reg, args.slug):
-            print(f"{reg}: removed section {slug!r}")
+        if _prune_ledger_section(root / reg, heading):
+            print(f"{reg}: removed section {safe_name(heading)!r}")
+
+    if queue_moved:
+        queue_md.write_text(queue_new, encoding="utf-8")
+        print(f"queue.md: retired {', '.join(queue_moved)}")
+
+    if questions_moved:
+        questions_md.write_text(questions_new, encoding="utf-8")
+        print(f"questions.md: answered {', '.join(questions_moved)} (task completed)")
 
     if row is not None:
-        sh = _CloseArgs(
-            log=getattr(args, "log", None),
-            date=args.date,
-            task=task_cell,
-            tier=SHADOW_TIER,
-            gate=args.gate,
-            action=args.action,
-            stage=args.stage,
-            apply=True,
-        )
-        cmd_shadow_row(sh)
+        # The row close printed in its dry run, verbatim — `mergedBy` evidence
+        # included — through the same append `shadow-row` uses.
+        try:
+            updated = shadow_apply(log.read_text(encoding="utf-8"), row)
+        except (OSError, ValueError) as exc:
+            print(f"shadow-row: {exc}", file=sys.stderr)
+        else:
+            log.write_text(updated, encoding="utf-8")
+            print(row)
+            print(shadow_count_line(shadow_rows(updated)))
+            print(f"shadow-row: appended to {log}")
 
-    _close_tail(root, args, rel)
+    _close_tail(root, args, rel, touched)
     return 0
 
 
@@ -3360,8 +4345,14 @@ class _CloseArgs:
         self.__dict__.update(kw)
 
 
-def _close_tail(root: Path, args, rel: str) -> None:
-    """What `close` will not do for you: repoint the references, render the page."""
+# What `pyauto-brain intake --apply dashboard` writes (the render rides the
+# close-out commit).
+DASHBOARD_PAGES = ("dashboard.md", "dashboard.html", "state.json")
+
+
+def _close_tail(root: Path, args, rel: str, touched: "list[str]") -> None:
+    """What `close` will not do for you: repoint the references, render the page,
+    commit exactly the paths it touched."""
     refs = close_references(root, args.slug, rel)
     if refs:
         print(
@@ -3378,8 +4369,13 @@ def _close_tail(root: Path, args, rel: str) -> None:
         "and `main` heals the render (dashboard_refresh.yml)."
     )
     print(
-        "  Nothing is staged: `git add -A` what you just changed, then "
-        "`lifecycle.py check --paths …` before you push."
+        "\ncommit: nothing is staged. Run `lifecycle.py check --paths …`, then "
+        "commit exactly these paths (the render's three files included), plus "
+        "any file the sweep changed:"
+    )
+    print(
+        f'  prompt_sync_push "complete: {args.slug}" '
+        + " ".join(touched + list(DASHBOARD_PAGES))
     )
 
 
@@ -3431,6 +4427,12 @@ def main() -> int:
         "`record --prompt`, draft/ prompts resolve too)",
     )
     cl.add_argument(
+        "--issue",
+        help="the task's issue URL: finds its registry row when the row's "
+        "heading is not the slug and its `prompt:` does not name the prompt "
+        "(default: the prompt's `Issue:` header)",
+    )
+    cl.add_argument(
         "--pr",
         nargs="+",
         action="extend",
@@ -3460,6 +4462,24 @@ def main() -> int:
         default="1",
         choices=list(SHADOW_STAGES),
         help="the shadow row's protocol stage (default: 1)",
+    )
+    cl.add_argument(
+        "--actor",
+        choices=list(MERGE_ACTORS),
+        help="REQUIRED with --tier glance (never inferred): who merged — "
+        + ACTOR_GUIDE + ". `gh pr view --json mergedBy,mergedAt` adds the evidence",
+    )
+    cl.add_argument(
+        "--read-by-human",
+        dest="read_by_human",
+        metavar="DATE",
+        help="the date the human read the post-merge summary (default: empty)",
+    )
+    cl.add_argument(
+        "--no-gh",
+        action="store_true",
+        dest="no_gh",
+        help=f"skip the mergedBy lookup (also: {NO_GH_ENV}=1)",
     )
     cl.add_argument(
         "--no-shadow-row",
@@ -3520,10 +4540,49 @@ def main() -> int:
     )
     sr.add_argument("--brief", help="--stage2: the shift's brief slot")
     sr.add_argument(
+        "--actor",
+        choices=list(MERGE_ACTORS),
+        help="REQUIRED (never inferred): who merged — " + ACTOR_GUIDE,
+    )
+    sr.add_argument(
+        "--read-by-human",
+        dest="read_by_human",
+        metavar="DATE",
+        help="the date the human read the post-merge summary (default: empty)",
+    )
+    sr.add_argument(
+        "--no-gh",
+        action="store_true",
+        dest="no_gh",
+        help=f"skip the mergedBy lookup (also: {NO_GH_ENV}=1)",
+    )
+    sr.add_argument(
         "--apply", action="store_true", help="write the row (default: dry run)"
     )
     sr.add_argument("--log", help="path to autonomy_log.md (default: this repo's)")
     sr.set_defaults(func=cmd_shadow_row)
+
+    rc_ = sub.add_parser(
+        "shadow-recount",
+        help="print the stage-1 window by merge actor and the historical "
+        "recount by completion record (writes nothing)",
+    )
+    rc_.add_argument("--log", help="path to autonomy_log.md (default: this repo's)")
+    rc_.add_argument("-v", "--verbose", action="store_true", help="one line per row")
+    rc_.set_defaults(func=cmd_shadow_recount)
+
+    au = sub.add_parser(
+        "audit-sample",
+        help="draw the seeded 1-in-5 audit sample of the glance window "
+        "(counted stage-1 rows, plus stage 2 when present); writes nothing",
+    )
+    au.add_argument("--seed", type=int, required=True, help="the draw's seed")
+    au.add_argument("--rate", type=float, default=AUDIT_RATE,
+                    help=f"fraction drawn (default {AUDIT_RATE}: 1 in 5)")
+    au.add_argument("--since", metavar="DATE",
+                    help="only rows dated on or after DATE (e.g. the last audit)")
+    au.add_argument("--log", help="path to autonomy_log.md (default: this repo's)")
+    au.set_defaults(func=cmd_audit_sample)
 
     ix = sub.add_parser(
         "index", help="generate complete/index.md (token-light archive navigation)"
