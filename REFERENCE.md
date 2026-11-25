@@ -206,9 +206,30 @@ dependency audits, smoke tests, lint sweeps) lives in the organ that owns it —
 `PyAutoBrain/skills/`, `PyAutoHeart/skills/`, `PyAutoHands/`.
 
 `scripts/prompt_sync.sh` is sourced by skills that mutate registry files
-(`active.md`, `planned.md`, etc.) to commit and push back to origin. It
+(`active.md`, `planned.md`, etc.) to commit the paths each call names, and only
+those, and push back to origin. It
 replaces a now-removed `admin_sync.sh` helper that formerly operated on
 `admin_jammy/prompt/`.
+
+It pushes the current branch, and refuses a detached HEAD unless the call names
+the target. To write Mind from a temporary worktree detached on `origin/main`
+(rather than the shared checkout):
+
+```bash
+git -C PyAutoMind fetch origin
+git -C PyAutoMind worktree add --detach <tmp> origin/main
+# edit files under <tmp>, then:
+PROMPT_REPO=<tmp> PROMPT_SYNC_PUSH_TO=main prompt_sync_push "prompt: <subject>" <paths>
+```
+
+`PROMPT_SYNC_PUSH_TO` pushes `HEAD:main` with no force. Before staging it
+fetches `origin/main` and refuses if HEAD already holds commits that `origin/main`
+lacks, so a leftover variable can only ever publish the helper's own new commit. If `origin/main` has
+moved on, the push is rejected and the commit stays local: `git -C <tmp> fetch
+origin && git -C <tmp> rebase origin/main && git -C <tmp> push origin HEAD:main`
+(re-running `prompt_sync_push` would be a no-op, since nothing is left to
+commit). On a named branch the variable
+is not needed, and a value that differs from that branch is refused (issue #556).
 
 ---
 
@@ -338,6 +359,7 @@ Free-form markdown. Strong conventions:
   Issued: 2026-08-19        # optional; set when the prompt advances to active/
   Blocked-by: PyAutoFit#1436          # optional; see "Declaring a gate" below
   Epic: cluster-strong-lensing        # optional; an entry in epics.md
+  Verified: 2026-11-12 42a5be1d (PyAutoLens)  # optional; written by `batch premise`
   ```
 
   When present, `Type:` should match the work-type folder. The goal is light
@@ -443,10 +465,78 @@ history unattended will not record it.
   An entry is a `prompt` (one named file) or `retired` (kept for the history of
   what was wanted and why it left). A batch is never composed here —
   `pyauto-brain batch plan` proposes one against a review-minute budget, and the
-  human approves or edits it in the slot.
+  human approves or edits it in the slot. Below the queue the planner sorts
+  `Priority:` before review-minutes. **Validated and binding** (M2.3,
+  `PyAutoBrain/AUTONOMY.md` "M2 rulings — 2026-11-12"): `lifecycle.py check`
+  fails on a `prompt` ref that resolves to no `draft/` or `active/` prompt, and
+  an empty or absent list stops an unattended shift's backlog dip — only the
+  brief's named tasks run.
+- **[`goals.md`](goals.md)** — the human's goals, in order (PyAutoMind#565):
+  `## <n>. <goal>` with optional `epics:`/`tags:`/`note:`. `pyauto-brain batch
+  brief --new <slot>` copies them into a brief's `goals:` and scopes its
+  backlog dip to their epics and tags; `lifecycle.py check` validates the file
+  (numbered 1..n, at most 10 goals of at most 200 characters). Public, like
+  the rest of the Mind.
+- **The human writes both; the dashboard reads them.** `queue.md` is edited in
+  a chat that ran `/queue` (PyAutoBrain `skills/queue`): a pasted prompt,
+  path, title or dashboard 📋 text adds an entry, never starts dev.
+  `scripts/queue_edit.py` does the edit (`show`, `add`, `remove`, `move`) so
+  nothing hand-edits the markdown, and the write lands through a temporary
+  worktree detached on `origin/main` and `prompt_sync_push`. The published
+  dashboard shows a read-only ★ and rank `#n` on each queued task (PyAutoBrain#640,
+  which removed the earlier issue-driven input path of PyAutoMind#565).
 - **`batches/<YYYY-MM-DD>-<am|pm>.md`** — one record per dispatched batch,
-  written at dispatch and appended at collection. Schema and the three fields
+  written at dispatch (the shift brief), with the digest appended after
+  `review-at:`. Schema and the three fields
   that are easy to get wrong are in [`batches/AGENTS.md`](batches/AGENTS.md).
+
+### Watching a shift: the cockpit
+
+A running shift is watched from chat with `/cockpit` (PyAutoBrain
+`skills/cockpit`, PyAutoBrain#646). It holds one Monitor on the shift's local
+event stream (`pyauto-brain batch watch --stream`, which reads the watcher's
+`events.jsonl`) inside the shift's window. That is the one watch a session may
+hold ([`policy/shift_cockpit_watch.md`](policy/shift_cockpit_watch.md),
+enforced by the end-at-deliverable hook). It steers only by comments on the
+shift issue from the human's login (`/pause`, `/resume`, `/drop`, `/stop`,
+`/kill`, `/cap`, `/add`), and it writes nothing in this repo: in a cockpit
+chat a pasted prompt is an `/add` to the shift, and queue and question edits
+go through `/queue` and `/questions`.
+
+### The questions inbox (`questions.md`)
+
+A shift worker that parks on a question asks it on its issue and stops. The
+question also lands here, so the human answers the shift's questions in bulk
+after the run instead of being @-mentioned mid-shift (M3.5, PyAutoBrain#645).
+
+- **[`questions.md`](questions.md)** — one `### Q<n>. <task> — <short ask>`
+  entry per question, under `## Open`, `## Deferred`, `## Answered` or
+  `## Dropped`; the section is the state. Keys: `task:` (the prompt),
+  `issue:` (where the question lives), `kind:` (`question`, or `blocked` for a
+  worker stopped at a prompt nobody answered), `ask:`, `options:`, `shift:`,
+  `asked:`, `worker:`. Ids are global and increasing; `(shift, task, issue)`
+  is unique.
+- **Two writers, one script.** The shift watcher adds entries through its one
+  Mind writer (the `question-add` op calls `scripts/questions_edit.py`
+  `add_text` from the tree it writes). A chat that ran `/questions` (PyAutoBrain
+  `skills/questions`) answers, defers, drops or reopens them with
+  `questions_edit.py`, in a temporary worktree detached on `origin/main`,
+  committed with `prompt_sync_push`. Nothing hand-edits the file.
+- **An answer resumes the task.** `answer` moves the entry to Answered and, in
+  the same commit, appends the answer to the task's prompt under
+  `## Answers from the human`. The watcher holds a task an earlier shift left
+  parked until every question it parked on is answered; then the next shift
+  re-enters it at its old standing (its `queue.md` rank, else a small dip) and,
+  for a task already claimed by a shift worker, resumes the claim, issue,
+  branch and worktree with the answer in its prompt. Defer keeps the hold;
+  drop shelves the task (held until reopened, named in a brief, or `/add`-ed).
+- **Validated.** `lifecycle.py check` fails on a malformed entry, a repeated
+  id, or an Open or Deferred entry whose task is in neither `draft/` nor
+  `active/`. `lifecycle.py close` moves the closed task's Open and Deferred
+  entries to Answered with `answer: (task completed)`.
+- **Read-only on the dashboard.** The inbox section lists the Open entries
+  with a 📋 that copies `Use the questions skill. Q<n>` to paste into a
+  chat that runs `/questions`.
 
 ### The review-cost model
 
@@ -502,10 +592,33 @@ faculty at conception and all overridable by declaring them:
   a resource: where the work can run at all. `any` runs anywhere, a cloud
   session included; `local-dev` needs the laptop; `ral`, `gpu` and `wsl-data`
   each **imply `local-dev`** and refine it (RAL test runs, the laptop GPU, data
-  under `/mnt/c`). Write `any`, never `none`. A `ral` task never submits on its
+  under `/mnt/c`). Write `any`, never `none`. **An absent `Lane:` is not
+  `any` everywhere** (M2.3, `PyAutoBrain/AUTONOMY.md` "M2 rulings —
+  2026-11-12"): an unattended or cloud pick (`batch plan`, the shift watcher)
+  excludes the draft and says so; only an attended pick (`batch plan
+  --attended`) reads it as `any`. Intake therefore refuses to file a new draft
+  whose lane is neither declared (a `Lane:` header, or `intake classify --lane
+  any`) nor inferred from a resource signal. A `ral` task never submits on its
   own: the Science orchestrator is the single RAL gateway, and a dev worker
   hands it a **RAL test packet** (what to run, at which commit, the pass/fail
   rule) — planned for phase 5 of the autonomous-orchestrators epic.
+
+  Intake infers a lane at filing from the text (`_intake.LANE_SIGNALS`). A
+  mechanism counts wherever it appears: SLURM, `sbatch`, `--gres` or a
+  `/mnt/ral` path → `ral`; CUDA or the laptop GPU → `gpu`; any other
+  `/mnt/<drive>` path → `wsl-data`; "private data" → `local-dev`. A bare
+  resource name (RAL, A100, HPC → `ral`; GPU → `gpu`) counts only in the
+  title, the `Witness:` line or a requirement phrase ("re-run … on the A100",
+  "submit … to RAL", "needs a GPU"), and a negated mention never counts. The backlog filed before that was backfilled
+  from the same table by `PyAutoBrain/bin/lane_backfill.py` (2026-11-12), whose
+  proposals a human skims before `--apply` writes them.
+- **`Verified:`** `<date> <sha> (<repo>)[, …]` — written, never by hand, when
+  `pyauto-brain batch premise <draft> --write-verified` finds the draft's
+  premise still holds on a fresh `main` (the files, functions and issues it
+  names exist; a smoke-duration claim matches the Heart's timing record). A
+  dispatched shift worker runs that check first and stops on `obsolete`; its
+  stamp reaches this file through the shift's ledger (`set-header` op), never
+  a worker commit. Absent means never checked, not stale.
 
 Measured over the 153 backlog prompts the day this shipped: **151 grade `judge`,
 because three carry a witness.** Given one, the same backlog grades 33 `notify` /
@@ -902,9 +1015,16 @@ appends to the window):
 ```bash
 python3 scripts/lifecycle.py close <slug> --date YYYY-MM-DD --from-file <body.md> \
     [--prompt <path|filename>] [--pr Repo#N …] \
-    [--tier glance --gate "<cell>" --action <merged-unchanged|…> [--stage 1|2]] \
-    [--no-shadow-row] [--apply]
+    [--tier glance --gate "<cell>" --action <merged-unchanged|…> [--stage 1|2] \
+     --actor <class>] [--no-shadow-row] [--apply]
 ```
+
+`--actor` is required whenever a shadow row is written (`close --tier glance`,
+`shadow-row`, `shadow-row --stage2`) and refuses when missing: a human-typed
+`/prm` → `human-/prm`; an in-turn merge on the human's explicit merge command →
+`in-turn-human-commanded`; an in-turn tiered merge with no human command →
+`in-turn-autonomous` (`unattended-watcher` is the watcher's; `unknown` only when
+passed explicitly).
 
 Dry run by default: it prints the record path, the prompt it will remove, every
 registry entry it will drop, the shadow row it would append, and the references

@@ -90,10 +90,17 @@ LEDGER_FILES = (
     "dashboard.html",
     "state.json",
     "queue.md",
+    # The human's ordered goals, which briefs copy (PyAutoMind#565) — the
+    # queue's sibling, written by the same dashboard door.
+    "goals.md",
     # The close-out guard's generated flags and the human's dismissals of
     # them (PyAutoBrain `intake looks-shipped`) — ledger, like queue.md.
     "looks_shipped.json",
     "looks_shipped_dismissed.md",
+    # Parked questions waiting for the human (M3.5, PyAutoBrain#645): the
+    # shift watcher adds entries through its one Mind writer (`question-add`)
+    # and a `/questions` chat answers them — ledger, like queue.md.
+    "questions.md",
 )
 
 # Names that are ledger by location but executable by collection. The ledger

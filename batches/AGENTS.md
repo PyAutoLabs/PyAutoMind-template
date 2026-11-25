@@ -1,7 +1,7 @@
 # Batch records
 
-One file per dispatched batch: `<YYYY-MM-DD>-<am|pm>.md`. Written at dispatch,
-appended at collection. This is the ledger of what was sent into one shift and
+One file per dispatched batch: `<YYYY-MM-DD>-<am|pm>.md`. Written at dispatch
+(today that is the shift brief), with the digest appended after `review-at:`. This is the ledger of what was sent into one shift and
 what came back — the same genre as `complete/`, and the evidence base the budget
 and the review-minute estimate are calibrated from.
 
@@ -9,11 +9,12 @@ It auto-merges (`scripts/ledger_merge.py` — `batches/` is a ledger dir), becau
 an unattended system that cannot record its own history unattended will not
 record it.
 
-**Collected once, reviewed once.** A dev batch is dispatched as one shift and
-reviewed as one sitting: one `- review:` line, one review file. The dashboard's
-batch status box is the live view of the open slot — every member with what it
-is doing — and it offers the button to the review packet once `collected:` is
-stamped, because there is nothing to review before that. A science batch is a
+**Reviewed once.** A dev batch is dispatched as one shift and reviewed as one
+sitting: one `- review:` line, one review file. The dashboard's batch status box
+is the live view of the open slot — every member with what it is doing. Its
+button to the review packet keys on `collected:`, which only the retired collect
+step stamped, so a record written since does not show it; the digest comment on
+the shift's `issue:` is the review surface now. A science batch is a
 rolling board instead, ruled on more than once and closing only when nothing is
 left on the board (`PyAutoCortex/batches/AGENTS.md`, "A rolling board, not a
 dispatch"); that difference is the Cortex's, not a change here.
@@ -26,7 +27,7 @@ dispatch"); that difference is the Cortex's, not a change here.
 - review-at: 2026-09-04T08:00Z     # stated by the human AT DISPATCH
 - shift: night                     # free-text label the human gives it
 - lane: any
-- integration: yes            # optional, at dispatch: build the review's integration worktree at collect
+- integration: yes            # legacy: read only by the retired collect step
 - review-minutes-planned: 42
 - usage-window-at-dispatch: <5h %, weekly %, opus %>
 - heart-ack:                  # the reason set acknowledged FOR THIS SHIFT
@@ -35,23 +36,30 @@ dispatch"); that difference is the Cortex's, not a change here.
   - <member>: <what it may legitimately change, e.g. "merges into PyAutoArray and may stale release validation">
 - members:
   - <slug>: <prompt path> — <tier> — <review-minutes> — <outcome>
-- outcomes:                   # filled at collect, from the ledger only
+- outcomes:                   # legacy: filled by the retired collect step, from the ledger only
   - <slug>: merged | rejected-at-review | carried | unreviewed
-- merge-order:                # filled at collect — advice for /prm, not an action
+- merge-order:                # legacy: filled by the retired collect step — advice for /prm, not an action
   - 1. <slug> — library (PyAutoFit) — before its workspace dependants
-- collected: 2026-09-04T08:30Z
+- collected: 2026-09-04T08:30Z     # legacy
 - reviewed-at: 2026-09-04T08:30Z   # when they actually sat down
-- usage-window-at-collect: <5h %, weekly %, opus %>
+- usage-window-at-collect: <5h %, weekly %, opus %>   # legacy
 - delivered: <n>/<n>
 - packet: batches/packets/<YYYY-MM-DD>-<slot>.html
-- integration-root: ~/Code/PyAutoLabs-wt/integration-<YYYY-MM-DD>-<slot> — integration/<slot>; 3 clean, 1 conflicted
-- integration-remote: PyAutoFit:integration/<slot>, PyAutoArray:integration/<slot>-2   # only after --push
+- integration-root: ~/Code/PyAutoLabs-wt/integration-<YYYY-MM-DD>-<slot> — integration/<slot>; 3 clean, 1 conflicted   # legacy
+- integration-remote: PyAutoFit:integration/<slot>, PyAutoArray:integration/<slot>-2   # legacy
 - sweep-after: 2026-09-11        # when the branch sweep may delete those refs
 - review: batches/reviews/<YYYY-MM-DD>-<slot>.md
 - review-minutes-actual: <n>
 - notes: |
     What actually happened. Anything that stalled, and why.
 ```
+
+Fields marked `legacy` were written by `pyauto-brain batch collect`, the manual
+step that scored a dispatched batch into a review packet. `batch collect` was
+retired in PyAutoBrain#701: a shift is now a brief the watcher runs, and its
+digest is the report. Nothing writes those fields any more. Older records keep
+them, and the readers that still use them (`batch plan` on `outcomes:`, the
+branch sweep on `sweep-after:`) read them from those records.
 
 ## The four fields that are easy to get wrong
 
@@ -69,16 +77,16 @@ standing one, which doctrine voids.
 **`outcomes:` is the accounting; the member line is the evidence.** The member
 line's last column says what was *observed* ("PyAutoFit#1554, 4/4 checks
 green"); `outcomes:` says what *became of it*, in one of four words. `batch
-collect` fills it from the ledger and from nothing else — a `complete/` record
+collect` filled it, until it was retired, from the ledger and from nothing else — a `complete/` record
 naming the member (its `- batch:` line cites the slot and the member slug, or
 the record is filed under the member's own name) is `merged`; a review `decision:` that rejected it is
 `rejected-at-review`; a row still in `active.md` is `carried`; anything else is
 `unreviewed`. In that order, because a rejected member is still in `active.md`.
-No `gh` call is made to fill it, and none should be: the organism's own files
+No `gh` call was made to fill it, and none should be: the organism's own files
 are what a record is allowed to claim. This exists because all nine members of
 the 2026-08-31-pm slot merged and every one of them is recorded
 `decision: UNREVIEWED` — the completion records knew, and nothing read them.
-The next `batch plan` reads the `carried` members first: they are already
+`batch plan` still reads the `carried` members of the previous record first: they are already
 costing the human review-minutes in the slot being planned.
 
 **`merge-order:` is advice, and it is the only order the record can give.**
@@ -102,35 +110,26 @@ sentence where the path goes — are left alone.
 
 **`packet:` is the page the human actually reviewed, archived.** One
 self-contained HTML file per slot under `batches/packets/` (see that folder's
-`AGENTS.md`), written at dispatch with PENDING members and refreshed at
-collect. It is the historical record of what the human was shown; a batch
+`AGENTS.md`). The retired collect step wrote it at dispatch with PENDING members
+and refreshed it at collect; under a shift brief the page is opt-in
+(`packet: yes`) and the watcher writes it as `digest.html` with the digest. It is the historical record of what the human was shown; a batch
 whose packet was never archived cannot be audited against what they ruled on.
 
-**`integration:` is opt-in, and it is local.** `yes` asks the collect to build
-one throwaway worktree root for the slot merging every member's head branch per
-repo, so the reviewer can run the whole batch together. It costs git time, not
-tokens, and it is off by default because most slots do not need it. Nothing is
-pushed, nothing is resolved: a member whose merge conflicts is left out of that
-repo's branch and named with the conflicting paths — that report is the point,
-not a failure. `collect --integration` turns it on for one run without editing
-the record, and what happened comes back as `integration-root:`, a key of its
-own so the `yes` you wrote here survives.
+**`integration:`, `integration-root:` and `integration-remote:` are history.**
+The retired collect step could build one throwaway worktree root per slot that
+merged every member's head branch per repo (`integration: yes`, or
+`collect --integration` for one run), and could publish those merges as
+`integration/<slot>` refs (`--push`), listed under `integration-remote:`.
+Nothing builds or pushes an integration preview now, so no new record carries
+these keys.
 
-**`integration-remote:` is what was published; `sweep-after:` is when it
-dies.** Neither appears unless someone typed `collect --integration --push` —
-the record cannot ask for a push, only for the local preview. `integration-remote:`
-lists one `<Repo>:<branch>` per repo that got a ref, under the repo name the
-branch sweep matches on, and it is **rewritten on every push**: the current
-publication is the truth, and a stale entry would send the sweep after a ref
-that no longer exists. A `-N` suffix (`integration/<slot>-2`) means that
-refresh was not a fast-forward of what was already on origin — nothing was
-forced, the earlier ref is untouched, and the new state went out under a new
-name. `sweep-after:` is `review-at:` plus a week, **written once and yours to
-change**: `bin/branch_sweep.sh` protects an `integration/*` ref until that date
-and may delete it on or after the following day, and with no date — or no
-record naming the branch — it is protected outright. Edit the date, do not
-delete the key: without it the ref lives forever, because a merge preview can
-never be proven contained in `main`.
+**`sweep-after:` still governs the refs already published.** It is
+`review-at:` plus a week, written once and yours to change:
+`bin/branch_sweep.sh` protects an `integration/*` ref until that date and may
+delete it on or after the following day, and with no date — or no record
+naming the branch — it is protected outright. Edit the date, do not delete the
+key: without it the ref lives forever, because a merge preview can never be
+proven contained in `main`.
 
 **`review:` is what the human said, verbatim.** The markdown their packet-page
 submission produced (or the orchestrator transcribed), one file per slot under
@@ -173,7 +172,8 @@ only while a brief is open (`policy/shift_watcher.md`).
 - dispatched: 2026-11-04T08:30Z
 - review-at: 2026-11-04T11:30Z      # stated by the human; the grant expires here
 - shift: morning
-- issue: https://github.com/PyAutoLabs/PyAutoMind/issues/<n>   # the digest is posted here once
+- issue: https://github.com/PyAutoLabs/PyAutoMind/issues/<n>   # required for a live brief; `brief --new` creates it
+- live: LIVE · 1 running … — status: <comment url>   # written by the watcher only (PyAutoBrain#622)
 - packet: yes                       # optional; the HTML packet is opt-in under a brief
 - heart-ack:
   - <reason line>
@@ -195,19 +195,66 @@ only while a brief is open (`policy/shift_watcher.md`).
     - draft/feature/autofit/<name>.md
     - epics: euclid-dr1
   - review-minutes: 45
-  - lanes: any local-dev ral         # any subset of: any local-dev ral gpu wsl-data
+  - lanes: any local-dev ral         # the default; any subset of: any local-dev ral gpu wsl-data
   - merge-cap: 3                     # unattended glance merges this shift, at most
   - token-budget: <n>                # tokens the shift may spend, all sessions
-  - max-workers: 2                   # optional: concurrent workers (default 2)
-  - max-sessions: 6                  # optional: sessions this shift, all told (default 6)
+  - max-workers: 4                   # optional: concurrent workers (default 4)
+  - max-sessions: 8                  # optional: sessions this shift, all told (default 8)
+  - worker-backend: claude           # optional: claude (default) | codex
   - worker-mode: auto                # optional: auto (default) | dontAsk | acceptEdits — never bypassPermissions
   - sandbox: no                      # optional: yes marks a test shift
   - shadow: no                       # optional: yes plans and digests, spawns nothing
-  - ral-allowance:                   # only when lanes includes ral; phase 5 consumes it
+  - ral-allowance:                   # required when lanes includes ral; these are the defaults
     - packets: 2
     - partition: ral
     - cpu-hours: 64
 ```
+
+**Goals come from [`goals.md`](../goals.md)** (PyAutoMind#565). `pyauto-brain
+batch brief --new <slot> --review-at <ISO>` writes a skeleton brief whose
+`goals:` are that file's goals in order, with `backlog: scoped` to the union of
+their `epics:`/`tags:` (or `tiers: notify, glance` when no goal names any) plus
+the epics whose ledgers `queue.md` names, and defaults for the rest: `merge-cap:
+0`, and `lanes: any local-dev ral` with the `ral-allowance:` above (2 packets,
+partition `ral`, 64 cpu-hours; PyAutoBrain#696), so a queued RAL phase can run.
+Edit any of them per shift. It prints to stdout unless `--out`
+names a file, so writing the record — the dispatch — stays the human's act.
+`goals.md` is written by the human alone, so every goal is copied as written.
+`--new` also prints, on stderr, how the goals changed since the newest brief.
+`brief --check` warns when goal 1 of `goals.md` is missing from a brief.
+
+**The launch (2026-11-17, PyAutoBrain#659).**
+
+- **`issue:` is required for a live brief** (not `shadow: yes`): the status
+  comment, the steering commands and the digest all go there. With `--out`,
+  `brief --new` creates it on PyAutoMind (one `gh issue create`) and writes
+  it; a file that already names one keeps it, and `--issue <url>` names one by
+  hand. `brief --check` refuses a live brief without it, and refuses the
+  launch while the CLI login has expired or expires before `review-at:` (run
+  `claude /login`).
+- **Only a pushed brief opens.** The watcher finds the brief itself on Mind
+  `origin/main`: the one whose `dispatched:` has passed and whose
+  `review-at:` has not. A brief written but not pushed grants nothing.
+- **Never two open briefs.** If two pushed briefs overlap, the watcher ticks
+  neither and says `two open briefs on origin/main`.
+- **The watcher stops at `review-at:` + 45 min.** It posts the digest at
+  `review-at:`, sweeps late arrivals for 45 minutes, then stops ticking the
+  slot and renews no lease. A worker still out by then is in the digest.
+
+**The keep-Heart-green lane** (PyAutoBrain#625). `brief --new` first reads
+Heart's release verdict and sorts every reason into `fixable-dev`,
+`local-checkout`, `release-scope` or `human-only`, and appends a `## Heart`
+section after the brief's bullets: the reasons by class, what it filed or
+picked, and what needs the human. For `fixable-dev` reasons it files at most
+3 new bug drafts (deduplicated against `draft/`, `active/`, `queue.md` and its
+own state, by a `<!-- heart-key: … -->` mark), with no `Unattended:` header,
+so sizing decides. **It writes only with `--out` and an explicit `--mind`
+that is not the shared canonical checkout**: use a temp worktree on
+`origin/main`, then commit and push the drafts with the record from there. A
+stdout preview, or the shared checkout, writes nothing and says so. With
+`--green pick` (the human's opt-in) it names the drafts whose `Lane:` the
+brief allows under `tasks:`, with a last `heart-green` goal. It never
+releases, dispatches a workflow, forces or quarantines. Details: `PyAutoBrain/agents/conductors/batch/AGENTS.md`.
 
 `backlog:` decides what happens once the named tasks are done or blocked:
 `none` — nothing more; `fill-idle` — the planner's own ranking, under every
@@ -220,10 +267,15 @@ inside the brief exactly as a live shift would and records each proposal —
 prompt, tier, pick reason — but takes no lease and starts no worker, up to
 `max-sessions:` proposals. Its digest lists them as `proposed (shadow)`. The
 pilot opens with two shadow shifts as its baseline. At `review-at:` every shift,
-shadow or live, appends one row to `batches/pilot/pilot.md` (the pilot ledger;
-its own header says which cells are the human's to fill at check-in; in a
-shadow row they measure the human's own review time and merges in the window,
-the baseline).
+shadow or live, writes one machine-readable line to `batches/pilot/pilot.jsonl`
+(one line per slot: mode, tokens by component, merged PR URLs with `mergedBy`
+and merge actor, per-worker exits, stall minutes, `amended`), and
+`batches/pilot/pilot.md` is rendered from it (the pilot ledger; its own header
+says which cells are the human's to fill at check-in; in a shadow row they
+measure the human's own review time and merges in the window, the baseline).
+Both go through the one Mind writer as upsert ops, so a late arrival amends the
+slot's line (`amended`) and never adds a second (PyAutoBrain#610). Tokens a shift
+could not measure are written `null` (`unmeasured` in the render), never 0.
 
 **`merge-cap:` in practice (phase 4b).** A `glance` worker ends at PR-open; once
 its CI is green the watcher starts one independent close-out session (same
@@ -236,7 +288,7 @@ and the digest says why. Each unattended merge adds one row to
 
 `max-workers:` and `max-sessions:` are the watcher's usage caps (phase 3a,
 `PyAutoBrain/agents/conductors/batch/_orchestrator.py`): at a cap it stops
-spawning and records the refusal. Omitted, they default to 2 and 6; a value that
+spawning and records the refusal. Omitted, they default to 4 and 8; a value that
 is not a whole number refuses the brief.
 
 `worker-mode:` is the permission mode real workers run in (phase 3b). `auto` is
@@ -247,6 +299,26 @@ refused. `sandbox: yes` marks a test shift. (Until phase 3c it was the only
 brief a real worker could run under; the one-Mind-writer path lifted that — the
 workers' Mind changes now reach `main` only through the orchestrator.)
 
+`worker-backend:` selects execution only: `claude` remains the default for
+existing briefs; `codex` uses the local Codex CLI on Linux/WSL. Codex briefs
+must also declare `codex-model: <model-id>`; `codex-effort:` accepts `low`,
+`medium` (default), `high` or `xhigh`. Use a model/effort supported by the
+installed CLI/account. Codex accepts `worker-mode: auto` (automatic approval
+review) or `dontAsk` (never ask); both retain workspace-write sandboxing.
+`acceptEdits` has no Codex equivalent and is refused. No API billing fallback
+or automatic hook trust is enabled.
+
+Codex workers use the same task, proof and question contracts. Their local
+supervisor supplies liveness; unavailable/corrupt state holds the lease rather
+than declaring a crash. `/kill` targets that supervisor; the existing retry
+and `/drop` rules remain unchanged. Codex's pre-ship review runs in a fresh
+Opus CLI session through the accounted review helper, and close-outs remain
+Opus. Thus **both CLI logins are required even with `merge-cap: 0`**. Reviews
+are included in the worker's token accounting; live/incomplete usage retains
+its reservation. Backend identity is stored per lease, so old sessions are
+observed using their own backend. Preparation and the explicit no-op smoke
+check are in PyAutoBrain `docs/codex_orchestrator.md`.
+
 **Calibration rule.** A new brief is not accepted while the previous record
 lacks `review-minutes-actual:`. The planned figure is a seed; the 2026-08-31
 record never closed it, and an estimate nobody measures never improves.
@@ -256,8 +328,9 @@ nothing in it was dispatched, and `lifecycle.py` does not read it as one.
 
 ### Digest
 
-Appended to the record at collect, under a `## Digest` heading, and **posted
-once** as a comment on the shift's `issue:`. The record plus that comment is
+Appended to the record by the watcher's first tick after `review-at:`, under
+a `## Digest` heading, and **posted once** as a comment on the shift's
+`issue:`. The record plus that comment is
 the review surface; the HTML packet is written only when `packet: yes`.
 
 ```markdown
@@ -282,8 +355,15 @@ the review surface; the HTML packet is written only when `packet: yes`.
 - drafts-filed: 1
 - packets-sent: 0
 - workers-crashed: 0
-- tokens: <n> of <token-budget>
+- tokens: <measured> of <token-budget> (cache-read <n>; <k> session(s) unmeasured)
 - review-minutes-planned: 45
+
+### Workers
+- <label> (<worker key>): spawned/finished
+- <label> (<worker key>): spawned/parked — blocked 40 min — mentioned (parked)
+
+### Refusals
+- <task> — token-budget 100: 55 committed + 60 reserved per worker — 2× from <at>
 ```
 
 Brief work and backlog picks stay separate, and **every backlog pick carries a
@@ -301,10 +381,37 @@ worker's `<task>.done` (one URL per line, `merged <url>` for a PR it merged
 in-turn under its tier); each worker's `<task>.proof.md`, quoted verbatim — a
 task that wrote none gets a stub saying so, never an invented packet; one
 read-only `gh pr checks` per PR for its health; and its own counters.
-`glance-auto-merges`, `reverts`, `pushes`, `drafts-filed` and `packets-sent`
-stay 0 until phases 4–5 count them (human, 2026-11-04). The comment is posted
+`glance-auto-merges`, `reverts`, `drafts-filed` and `packets-sent` stay 0
+until phases 4–5 count them (human, 2026-11-04); `pushes` counts the
+@mentions below (PyAutoBrain#611). The comment is posted
 **once**: a local marker is created before the post, so a crash leaves no
-comment rather than two, and a failed post is not retried.
+comment rather than two; a post that fails outright is retried on later ticks,
+at most 3 attempts in all, and never after a timeout (a timeout may have
+posted). Counters come from one exit record per worker and from GitHub's merged
+state for each PR in the window, read at review-at after a final reap
+(PyAutoBrain#610). A late arrival amends the record and the pilot line and posts
+**one** correction comment. A worker that parks, or parks on its issue with a
+question (awaiting input), gets **one** comment on the digest issue
+@-mentioning the human (`mention_login`), derived from durable
+state and retried like the digest; the watcher posts with
+`PYAUTO_SHIFT_GH_TOKEN` (a bot account, PyAutoMind `issues: write` only) so the
+mention notifies, and the digest warns when the poster is the mentioned account
+(PyAutoBrain#611; AUTONOMY.md watcher network surface, amended 2026-11-12).
+**While the shift runs (PyAutoBrain#622)** the watcher keeps **one status
+comment** on the same issue: created once, then only edited (on a change of
+state, or every 10 minutes), never @-mentioning anyone. It shows each task's
+state, tokens against the budget, blocks, parks, refusals, time to `review-at:`
+and the steering commands. The human steers by commenting, the comment's first
+line one of `/pause`, `/resume`, `/drop <task>` or `/stop`; only their
+`mention_login` counts. Each command is acknowledged once, in that status
+comment. `/pause` holds spawns, re-dispatches and new close-outs until
+`/resume`; reaps and mentions continue. `/stop` writes the watcher's `STOP`
+file. `/drop` takes only a task of this shift; a dropped worker already
+running is not killed, and a merge that lands after a drop is never counted
+as unattended. The record's `- live:` line is the dashboard's
+one-line copy, rewritten through the one Mind writer when the state changes;
+nobody else writes it. Doctrine: AUTONOMY.md watcher network surface,
+amendment 2026-11-13.
 `batch digest --record <file>` prints it early; `batch brief --check` refuses a
 digest missing a section, a counter, a pick's `why:` or a started task's
 packet.

@@ -108,6 +108,11 @@ MIND_RULES = [
     ("condemned.md", "EMPTY"),
     ("ideas.md", "EMPTY"),
     ("queue.md", "EMPTY"),
+    # The human's goals: instance intent, like the queue (PyAutoMind#565).
+    ("goals.md", "EMPTY"),
+    # The human's inbox of parked questions (M3.5, PyAutoBrain#645): instance
+    # state, like the queue — the format lives in questions_edit.py.
+    ("questions.md", "EMPTY"),
     ("autonomy_log.md", "SPECIAL:autonomy_log"),
     # Prompt-file lifecycle (issue #71): draft/ (not-started) -> active/
     # (in-flight) -> complete/YYYY/MM (shipped). A fresh template ships an empty
@@ -357,6 +362,8 @@ EMPTY_TITLES = {
     "condemned.md": "# Condemned material",
     "ideas.md": "# Ideas",
     "queue.md": "# Queue",
+    "goals.md": "# Goals",
+    "questions.md": "# Questions",
     "reading-queue.md": "# Reading queue",
     "arxiv-inbox.md": "# arXiv inbox",
     "arxiv-interests.md": "# arXiv interests",
@@ -394,6 +401,8 @@ autonomy contract). One row per run, appended at PR-open or on parking.
 
 Outcome ∈ `merged-unchanged` / `amended` / `rejected` / `parked` /
 `corrective` / `red-override`.
+
+## Calibration runs
 
 | date | task | effective level | gates (tests/smoke/review/heart) | outcome |
 |------|------|-----------------|----------------------------------|---------|
